@@ -8,18 +8,22 @@ extern fn tree_sitter_lua() callconv(.c) *const kosm.treesitter.Language;
 /// Edits `.lua` files through `output.edit` (D31, D39). A path matches however the file nests
 /// it (D30): `M.blur = { enabled = true }`, `M.blur.enabled = true`, `local M = { ... }` and
 /// `hl.config({ M = { blur = { enabled = true } } })` all hold `M.blur.enabled`. Code inside
-/// function bodies runs later, not when the file loads, so paths never see it.
+/// function bodies runs later, not when the file loads, so paths never see it. Positional
+/// entries (`{ "a", "b" }`) are list elements (D90). `generate` writes a module,
+/// `return { ... }`, which a config reads with `require`.
 pub const adapter: kosm.Adapter = .{
     .name = "lua",
     .extensions = &.{".lua"},
     .default_format = .{ .boolean = .true_false },
     .comment = .{ .line = "--" },
     .format = format,
+    .serialize = serialize,
     .parser = kosm.treesitter.parser(tree_sitter_lua, .{
         .pair = "field",
         .key = "name",
         .value = "value",
         .nest = &.{"table_constructor"},
+        .list = &.{"table_constructor"},
         .quoted_key = &.{"string"},
         .transparent = &.{ "function_call", "arguments", "variable_declaration" },
         .assign = .{
@@ -33,6 +37,37 @@ pub const adapter: kosm.Adapter = .{
         },
     }),
 };
+
+/// Indentation of one nesting level in a written module.
+const indent = "    ";
+
+/// A module returning `root`: tables one entry per line, lists and the values inside them on one.
+fn serialize(writer: *std.Io.Writer, root: kosm.Value, context: *kosm.Adapter.Context) kosm.Adapter.Error!void {
+    try writer.writeAll("return ");
+    try writeBlock(writer, root, 0, context);
+    try writer.writeByte('\n');
+}
+
+fn writeBlock(writer: *std.Io.Writer, value: kosm.Value, depth: usize, context: *kosm.Adapter.Context) kosm.Adapter.Error!void {
+    if (value != .table or value.table.len == 0) return format(writer, value, context);
+    try writer.writeAll("{\n");
+    for (value.table) |entry| {
+        try writer.splatBytesAll(indent, depth + 1);
+        try writeKey(writer, entry.key);
+        try writer.writeAll(" = ");
+        try writeBlock(writer, entry.value, depth + 1, context);
+        try writer.writeAll(",\n");
+    }
+    try writer.splatBytesAll(indent, depth);
+    try writer.writeByte('}');
+}
+
+fn writeKey(writer: *std.Io.Writer, key: []const u8) std.Io.Writer.Error!void {
+    if (isName(key)) return writer.writeAll(key);
+    try writer.writeByte('[');
+    try writeString(writer, key);
+    try writer.writeByte(']');
+}
 
 /// One value as Lua: strings and colors quoted and escaped, tables and lists on one line.
 fn format(writer: *std.Io.Writer, value: kosm.Value, context: *kosm.Adapter.Context) kosm.Adapter.Error!void {
@@ -70,13 +105,7 @@ fn format(writer: *std.Io.Writer, value: kosm.Value, context: *kosm.Adapter.Cont
             try writer.writeAll("{ ");
             for (entries, 0..) |entry, index| {
                 if (index != 0) try writer.writeAll(", ");
-                if (isName(entry.key)) {
-                    try writer.writeAll(entry.key);
-                } else {
-                    try writer.writeByte('[');
-                    try writeString(writer, entry.key);
-                    try writer.writeByte(']');
-                }
+                try writeKey(writer, entry.key);
                 try writer.writeAll(" = ");
                 try format(writer, entry.value, context);
             }
@@ -411,4 +440,83 @@ test "format quotes strings, spells tables and refuses what Lua cannot write" {
     var yes_no = try fixture.output.edit(.{ .files = "~/a.lua", .format = .{ .boolean = .yes_no } });
     try testing.expectError(error.UnsupportedValue, yes_no.set("M.ratio", true));
     try testing.expectEqualStrings("path 'M.ratio': adapter 'lua': Lua spells booleans only as true and false; leave format.boolean at .true_false", fixture.diagnostics.message());
+}
+
+test "positional entries are list elements, and keyed ones stay reachable by path (D90)" {
+    var fixture: Fixture = undefined;
+    try fixture.init(&.{.{
+        "defs.lua",
+        \\M.border = { active_col = { colors = { "#2E8799", "#2E9990" }, angle = 45 } }
+        \\M.offset = { 0, 0 }
+        \\M.mixed = { "a", size = 1, -- a comment
+        \\    { nested = true } }
+        \\M.empty = {}
+        \\
+    }});
+    defer fixture.deinit();
+    var file = try fixture.output.edit(.{ .files = "~/defs.lua" });
+
+    const colors = try file.nodes("M.border.active_col.colors");
+    try testing.expectEqual(.list, colors[0].kind);
+    const color_elements = try file.elements(colors[0]);
+    try testing.expectEqual(2, color_elements.len);
+    try testing.expectEqualStrings("\"#2E9990\"", color_elements[1].text);
+    try file.replace(color_elements[1], "#ffffff");
+    try file.set("M.border.active_col.angle", 90);
+
+    const mixed = try file.nodes("M.mixed");
+    try testing.expectEqual(.table, mixed[0].kind);
+    const mixed_elements = try file.elements(mixed[0]);
+    try testing.expectEqual(2, mixed_elements.len);
+    try testing.expectEqualStrings("\"a\"", mixed_elements[0].text);
+    try testing.expectEqual(.table, mixed_elements[1].kind);
+    try file.set("M.mixed.size", 2);
+    try testing.expectError(error.NoMatch, file.set("M.mixed.nested", false));
+
+    try testing.expectEqual(0, (try file.elements((try file.nodes("M.empty"))[0])).len);
+    try testing.expectError(error.NotAList, file.elements((try file.nodes("M.border"))[0]));
+    try testing.expectError(error.NotAList, file.elements((try file.nodes("M.mixed.size"))[0]));
+
+    try testing.expectEqualStrings(
+        \\M.border = { active_col = { colors = { "#2E8799", "#ffffff" }, angle = 90 } }
+        \\M.offset = { 0, 0 }
+        \\M.mixed = { "a", size = 2, -- a comment
+        \\    { nested = true } }
+        \\M.empty = {}
+        \\
+    , fixture.planned("~/defs.lua"));
+}
+
+test "generate writes a module returning the table, one entry per line" {
+    var fixture: Fixture = undefined;
+    try fixture.init(&.{});
+    defer fixture.deinit();
+    try fixture.output.generate(.{ .file = "~/hypr/kosm.lua" }, .{
+        .general = .{
+            .border_size = 2,
+            .col = .{ .active_border = .{ .colors = .{ kosm.hex("#2e8799"), kosm.hex("#ffffff") }, .angle = 45 } },
+            .snap = .{},
+        },
+        .@"input-capture" = .{ .enabled = true },
+        .offset = .{ 0, 1.5 },
+    });
+    try testing.expectEqualStrings(
+        \\return {
+        \\    general = {
+        \\        border_size = 2,
+        \\        col = {
+        \\            active_border = {
+        \\                colors = { "#2e8799", "#ffffff" },
+        \\                angle = 45,
+        \\            },
+        \\        },
+        \\        snap = {},
+        \\    },
+        \\    ["input-capture"] = {
+        \\        enabled = true,
+        \\    },
+        \\    offset = { 0, 1.5 },
+        \\}
+        \\
+    , fixture.planned("~/hypr/kosm.lua"));
 }
