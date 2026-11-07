@@ -39,6 +39,7 @@ fn format(writer: *std.Io.Writer, value: kosm.Value, context: *kosm.Adapter.Cont
     switch (value) {
         .string => |text| try writeString(writer, text),
         .raw => |text| try writer.writeAll(text),
+        .joined => |parts| for (parts) |part| try format(writer, part, context),
         .integer => |integer| try writer.print("{d}", .{integer}),
         .float => |float| {
             if (!std.math.isFinite(float)) return context.unsupported("a Lua literal cannot be infinity or NaN; write kosm.raw(\"math.huge\") instead", .{});
