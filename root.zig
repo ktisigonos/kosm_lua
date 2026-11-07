@@ -122,6 +122,7 @@ const Fixture = struct {
     arena: std.heap.ArenaAllocator,
     plan: kosm.Plan,
     diagnostics: kosm.Diagnostics = .{},
+    warnings: kosm.Warnings = undefined,
     home_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined,
     output: kosm.Output = undefined,
 
@@ -131,6 +132,7 @@ const Fixture = struct {
             if (std.Io.Dir.path.dirname(file[0])) |parent| try fixture.tmp.dir.createDirPath(testing.io, parent);
             try fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = file[0], .data = file[1] });
         }
+        fixture.warnings = .init(fixture.arena.allocator());
         const length = try fixture.tmp.dir.realPath(testing.io, &fixture.home_buffer);
         fixture.output = .{
             .allocator = fixture.arena.allocator(),
@@ -138,6 +140,7 @@ const Fixture = struct {
             .adapters = &.{adapter},
             .plan = &fixture.plan,
             .diagnostics = &fixture.diagnostics,
+            .warnings = &fixture.warnings,
             .app = "hyprland",
         };
     }
