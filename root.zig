@@ -396,7 +396,7 @@ test "a table spelled only through dotted keys has no value to replace" {
     try testing.expectEqual(2, blur.len);
     try testing.expectEqual(null, blur[0].value);
     try testing.expectError(error.NoValue, file.setFirst("M.blur", .{ .enabled = false }));
-    try testing.expectEqualStrings("line 1: this table is spelled only through dotted keys, so it has no value to replace; set its keys instead", fixture.diagnostics.message());
+    try testing.expectEqualStrings("line 1: this table has no value of its own to replace, since headers or dotted keys spell it; set its keys instead", fixture.diagnostics.message());
     try file.set("M.blur.size", 10);
     try testing.expectEqualStrings("M.blur.enabled = true\nM.blur.size = 10\n", fixture.planned("~/defs.lua"));
 }
