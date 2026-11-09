@@ -5,11 +5,11 @@ const kosm = @import("kosm");
 
 extern fn tree_sitter_lua() callconv(.c) *const kosm.treesitter.Language;
 
-/// Edits `.lua` files through `output.edit` (D31, D39). A path matches however the file nests
-/// it (D30): `M.blur = { enabled = true }`, `M.blur.enabled = true`, `local M = { ... }` and
+/// Edits `.lua` files through `output.edit`. A path matches however the file nests
+/// it: `M.blur = { enabled = true }`, `M.blur.enabled = true`, `local M = { ... }` and
 /// `hl.config({ M = { blur = { enabled = true } } })` all hold `M.blur.enabled`. Code inside
 /// function bodies runs later, not when the file loads, so paths never see it. Positional
-/// entries (`{ "a", "b" }`) are list elements (D90). `generate` writes a module,
+/// entries (`{ "a", "b" }`) are list elements. `generate` writes a module,
 /// `return { ... }`, which a config reads with `require`.
 pub const adapter: kosm.Adapter = .{
     .name = "lua",
@@ -280,7 +280,7 @@ test "an unchanged value leaves the file unchanged" {
     try testing.expect(!fixture.plan.hasChanges());
 }
 
-test "every way Lua nests a key matches the same path (D30)" {
+test "every way Lua nests a key matches the same path" {
     var fixture: Fixture = undefined;
     try fixture.init(&.{
         .{ "a/table.lua", "M.blur = { enabled = true, size = 8 }\n" },
@@ -292,7 +292,7 @@ test "every way Lua nests a key matches the same path (D30)" {
     defer fixture.deinit();
     var files = try fixture.output.edit(.{ .files = "~/*/*.lua" });
     try testing.expectError(error.TooManyMatches, files.set("M.blur.enabled", false));
-    try testing.expectEqualStrings("path 'M.blur.enabled' matches 5 values (~/a/table.lua:1, ~/b/dotted.lua:1, ~/c/local.lua:1, ~/d/call.lua:1, ~/e/mixed.lua:3); narrow .files, or pick with setFirst, setAll or setNth (D31)", fixture.diagnostics.message());
+    try testing.expectEqualStrings("path 'M.blur.enabled' matches 5 values (~/a/table.lua:1, ~/b/dotted.lua:1, ~/c/local.lua:1, ~/d/call.lua:1, ~/e/mixed.lua:3); narrow .files, or pick with setFirst, setAll or setNth", fixture.diagnostics.message());
     try files.setAll("M.blur.enabled", false);
 
     try testing.expectEqualStrings("M.blur = { enabled = false, size = 8 }\n", fixture.planned("~/a/table.lua"));
@@ -337,7 +337,7 @@ const gamemode =
     \\
 ;
 
-test "hl.config calls are transparent, and expressions are overwritten (D29)" {
+test "hl.config calls are transparent, and expressions are overwritten" {
     var fixture: Fixture = undefined;
     try fixture.init(&.{.{ "hypr/general.lua", general }});
     defer fixture.deinit();
@@ -442,7 +442,7 @@ test "format quotes strings, spells tables and refuses what Lua cannot write" {
     try testing.expectEqualStrings("path 'M.ratio': adapter 'lua': Lua spells booleans only as true and false; leave format.boolean at .true_false", fixture.diagnostics.message());
 }
 
-test "positional entries are list elements, and keyed ones stay reachable by path (D90)" {
+test "positional entries are list elements, and keyed ones stay reachable by path" {
     var fixture: Fixture = undefined;
     try fixture.init(&.{.{
         "defs.lua",

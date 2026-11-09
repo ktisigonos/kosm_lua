@@ -8,7 +8,7 @@ try file.set("M.blur.enabled", self.blur);
 try file.set("M.border.active_col", self.border_active.format("rgba({})", &.{.hex8}));
 ```
 
-A path matches however the file nests its keys (D30). Each of these holds `M.blur.enabled`:
+A path matches however the file nests its keys. Each of these holds `M.blur.enabled`:
 
 ```lua
 M.blur = { enabled = true }
@@ -30,12 +30,12 @@ Only the value's bytes change; comments, spacing and key order stay as they are.
 | Value | Written as |
 |---|---|
 | string | a double-quoted Lua string, escaped |
-| color | a string in the file's color format; default `#rrggbb` (D61) |
+| color | a string in the file's color format; default `#rrggbb` |
 | integer, float | the number; floats at the file's precision, never infinity or NaN |
 | bool | `true` or `false`; `format.boolean` must stay `.true_false` |
 | struct | `{ key = value }` on one line, `["key"] = value` for keys that aren't names |
 | list | `{ a, b }` on one line |
 | `kosm.raw(text)` | `text`, verbatim |
 
-Paths name keys only (D77). Positional table entries (`{ "a", "b" }`) aren't reached by paths
+Paths name keys only. Positional table entries (`{ "a", "b" }`) aren't reached by paths
 or by `elements` yet.
