@@ -20,7 +20,9 @@ hl.config({ M = { blur = { enabled = true } } })
 Function calls are transparent, so `hl.config({ general = {...} })` holds `general`. Code inside
 function bodies (keybind callbacks, `function ... end`) runs later, not when the file loads, so
 paths never see it. A target whose key isn't spelled out (`M[key] = 1`) is skipped. A key written
-as `["col.active"] = ...` is the quoted path segment `"col.active"`.
+as `["col.active"] = ...` is the quoted path segment `"col.active"`. Code inside `if` and `do` blocks
+runs as the file loads, so paths see into it; a value set in several branches matches several
+times.
 
 A table spelled only through dotted keys (`M.blur` in `M.blur.enabled = true`) has no bytes of
 its own, so it can't be replaced; set its keys instead.

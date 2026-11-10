@@ -8,7 +8,8 @@ extern fn tree_sitter_lua() callconv(.c) *const kosm.treesitter.Language;
 /// Edits `.lua` files through `output.edit`. A path matches however the file nests
 /// it: `M.blur = { enabled = true }`, `M.blur.enabled = true`, `local M = { ... }` and
 /// `hl.config({ M = { blur = { enabled = true } } })` all hold `M.blur.enabled`. Code inside
-/// function bodies runs later, not when the file loads, so paths never see it. Positional
+/// function bodies runs later, not when the file loads, so paths never see it; `if` and `do`
+/// blocks run as the file loads, so paths see into them. Positional
 /// entries (`{ "a", "b" }`) are list elements. `generate` writes a module,
 /// `return { ... }`, which a config reads with `require`.
 pub const adapter: kosm.Adapter = .{
@@ -25,7 +26,7 @@ pub const adapter: kosm.Adapter = .{
         .nest = &.{"table_constructor"},
         .list = &.{"table_constructor"},
         .quoted_key = &.{"string"},
-        .transparent = &.{ "function_call", "arguments", "variable_declaration" },
+        .transparent = &.{ "function_call", "arguments", "variable_declaration", "if_statement", "elseif_statement", "else_statement", "do_statement", "block" },
         .assign = .{
             .node = "assignment_statement",
             .targets = "variable_list",
@@ -388,6 +389,22 @@ test "code inside function bodies, such as keybind callbacks, is invisible to pa
     try testing.expectError(error.NoMatch, files.set("duplicate", 1));
     try testing.expectError(error.NoMatch, files.set("M.x", 1));
     try files.set("M.f", kosm.raw("nil"));
+}
+
+test "settings inside if and do blocks are reachable, and one set in both branches matches twice" {
+    var fixture: Fixture = undefined;
+    try fixture.init(&.{
+        .{ "hypr/plugin.lua", "if hl.plugin.dynamic_cursors ~= nil then\n    hl.config({ plugin = { dynamic_cursors = { enabled = false } } })\nend\n" },
+        .{ "hypr/host.lua", "do\n    M.gaps = 5\nend\nif laptop then\n    M.scale = 2\nelseif tv then\n    M.scale = 3\nelse\n    M.scale = 1\nend\n" },
+    });
+    defer fixture.deinit();
+    var files = try fixture.output.edit(.{ .files = "~/hypr/*.lua" });
+    try files.set("plugin.dynamic_cursors.enabled", true);
+    try testing.expectEqualStrings("if hl.plugin.dynamic_cursors ~= nil then\n    hl.config({ plugin = { dynamic_cursors = { enabled = true } } })\nend\n", fixture.planned("~/hypr/plugin.lua"));
+    try files.set("M.gaps", 10);
+    try testing.expectError(error.TooManyMatches, files.set("M.scale", 4));
+    try files.setAll("M.scale", 4);
+    try testing.expectEqualStrings("do\n    M.gaps = 10\nend\nif laptop then\n    M.scale = 4\nelseif tv then\n    M.scale = 4\nelse\n    M.scale = 4\nend\n", fixture.planned("~/hypr/host.lua"));
 }
 
 test "a table spelled only through dotted keys has no value to replace" {
