@@ -48,7 +48,10 @@ fn serialize(writer: *std.Io.Writer, root: kosm.Value, context: *kosm.Adapter.Co
     try writer.writeByte('\n');
 }
 
-fn writeBlock(writer: *std.Io.Writer, value: kosm.Value, depth: usize, context: *kosm.Adapter.Context) kosm.Adapter.Error!void {
+/// Writes `value` the way a generated module spells it: a table one entry per line, indented
+/// as if it sat `depth` levels deep, anything else inline. For adapters whose files are Lua
+/// with more around the table, such as calls.
+pub fn writeBlock(writer: *std.Io.Writer, value: kosm.Value, depth: usize, context: *kosm.Adapter.Context) kosm.Adapter.Error!void {
     if (value != .table or value.table.len == 0) return format(writer, value, context);
     try writer.writeAll("{\n");
     for (value.table) |entry| {
