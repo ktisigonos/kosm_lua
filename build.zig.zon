@@ -5,18 +5,24 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .kosm = .{
-            .url = "git+https://git.nnstdios.com/ktisigonos/kosm?ref=master#8287196759d5e9001a092d16ba4d1e71065fdbfc",
-            .hash = "kosm-0.0.0-YCShsil5CgCzARk07rv-MaLMf7rL5zQCQ7pE9Or3jIb5",
+            .url = "git+https://git.nnstdios.com/ktisigonos/kosm?ref=master#031074194a7ffde476805826cc0a57df8a4c24e7",
+            .hash = "kosm-0.0.0-YCShsvq8DwCuLeDpbuLNcMkGvCk1MUbzs_BoqRZ-ltBn",
         },
         .tree_sitter_lua = .{
             .url = "git+https://github.com/tree-sitter-grammars/tree-sitter-lua?ref=v0.5.0#10fe0054734eec83049514ea2e718b2a56acd0c9",
             .hash = "N-V-__8AAE5ZCQA-BW5BOioWVkGcPTjhC5x1Qv07BH3Xt3dR",
+        },
+        .lua = .{
+            .url = "https://www.lua.org/ftp/lua-5.5.1.tar.gz",
+            .hash = "N-V-__8AAPqeFQDipy0CdI6MKBmwYYarybBTO3IIJPrSzH_w",
+            .lazy = true,
         },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "root.zig",
+        "frontend",
         "README.md",
     },
 }
