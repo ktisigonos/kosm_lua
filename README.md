@@ -84,5 +84,24 @@ base.kitty.fonts.font_size: expected a number, got the string 'big'`), a name th
 (a misspelled variable would otherwise be `nil`), and a field written in the script whose value is
 `nil`. A value built in a `local` takes the line of the field holding it.
 
+### Completion
+
+Whenever kosm builds the runner of scripts (`kosm build`, `kosm add`, `kosm update`, or an apply
+after Zig code changed), it writes LuaLS annotations for every app, base, look, Zig kosmos and its
+`Params` into the config's `zig-out/completions/lua/`, with the doc comments of their Zig
+sources, and creates `.luarc.json` in the config if it has none (it never rewrites one). The
+`.luarc.json` sets Lua 5.5 and leaves out what a kosmos lacks, so `print` or `io` show as undefined.
+
+Name a script's shape above its `return` to complete and check it:
+
+```lua
+---@type kosm.on.personal
+return { base = "personal", overrides = { ... } }
+```
+
+`kosm.on.<kosmos>` builds on that Zig kosmos (`kosm.on.frost.iced` for a variant); a script
+building on another script names the Zig kosmos at the bottom. `kosm.script` builds on none.
+Types keep their Zig names: `kosm_kitty.App`, `kosm.Theme.Input`.
+
 The frontend is a module of its own, `kosm_lua_frontend`: packages using only the adapter
 (`kosm_hyprland`, `kosm_nvim`) never fetch or build Lua.

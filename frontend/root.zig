@@ -4,6 +4,7 @@ const std = @import("std");
 const kosm = @import("kosm");
 const Interpreter = @import("Interpreter.zig");
 const Lines = @import("Lines.zig");
+const completion = @import("completion.zig");
 
 /// Reads `kosmoi/<name>.lua`. The script runs in Lua 5.5 without the io, os, package and debug
 /// libraries, and returns a table:
@@ -15,6 +16,8 @@ pub const frontend: kosm.Frontend = .{
     .name = "lua",
     .extensions = &.{".lua"},
     .load = load,
+    .complete = completion.complete,
+    .editor_file = completion.editor_file,
 };
 
 /// How deep tables may nest; deeper is taken for a table holding itself.
