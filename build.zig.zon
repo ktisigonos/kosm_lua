@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .kosm = .{
-            .url = "git+https://git.nnstdios.com/ktisigonos/kosm?ref=master#1fbab7c9f7d424b4b33d667d7758294d7c407ccc",
-            .hash = "kosm-0.0.0-YCShstfJEQDTN95a9dSXRz-WRr4SI6fmoBaErAf8Rn_K",
+            .url = "git+https://git.nnstdios.com/ktisigonos/kosm?ref=master#f72066d63d72a9fb30fbd114cc195f6b382f9602",
+            .hash = "kosm-0.0.0-YCShsjSaEgDguppkcNjodA9qfH-7HVofxpkwZgudl2kC",
         },
         .tree_sitter_lua = .{
             .url = "git+https://github.com/tree-sitter-grammars/tree-sitter-lua?ref=v0.5.0#10fe0054734eec83049514ea2e718b2a56acd0c9",

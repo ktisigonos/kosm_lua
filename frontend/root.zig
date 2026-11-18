@@ -20,6 +20,7 @@ pub const frontend: kosm.Frontend = .{
     .name = "lua",
     .extensions = &.{".lua"},
     .load = load,
+    .variants = variants,
     .complete = completion.complete,
     .editor_file = completion.editor_file,
 };
@@ -43,6 +44,26 @@ fn load(context: *kosm.Frontend.Context, source: []const u8) kosm.Frontend.Error
         .lines = try .init(context.arena, source),
     };
     return reader.built();
+}
+
+/// Runs the script and names the variants its table of functions gives, calling none of them:
+/// `light`, a group `dark` when it has a `kosmos`, and `dark.soft`.
+fn variants(context: *kosm.Frontend.Context, source: []const u8) kosm.Frontend.Error![]const []const u8 {
+    const interpreter = try Interpreter.init();
+    defer interpreter.deinit();
+    try Bridge.install(interpreter, context);
+    const chunk_name = try context.arena.dupeSentinel(u8, try context.arena.print("={s}", .{context.path}), 0);
+    if (interpreter.run(source, chunk_name)) |message| return context.fail("{s}", .{message});
+
+    var reader: Reader = .{
+        .context = context,
+        .interpreter = interpreter,
+        .lines = try .init(context.arena, source),
+    };
+    var names: std.ArrayList([]const u8) = .empty;
+    if (reader.isVariants(-1, 0)) try reader.appendVariants(-1, "", 0, &names);
+    std.mem.sort([]const u8, names.items, {}, Reader.lessThan);
+    return names.items;
 }
 
 /// Turns the script's result, on top of the stack, into kosm's loose values.
@@ -108,6 +129,32 @@ const Reader = struct {
             }
         }
         if (interpreter.callTop()) |message| return reader.context.fail("{s}", .{message});
+    }
+
+    /// Appends the name of every variant in the table of variants at `index` to `names`, each
+    /// after `prefix` ("dark."); a `kosmos` names the table's own kosmos, not a variant.
+    fn appendVariants(reader: *Reader, index: c_int, prefix: []const u8, depth: usize, names: *std.ArrayList([]const u8)) kosm.Frontend.Error!void {
+        const interpreter = reader.interpreter;
+        const arena = reader.context.arena;
+        const position = interpreter.absolute(index);
+        try interpreter.reserve(3);
+        interpreter.pushNil();
+        while (interpreter.next(position)) {
+            const key = interpreter.string(-2).?;
+            if (!std.mem.eql(u8, key, "kosmos")) {
+                const name = try arena.print("{s}{s}", .{ prefix, key });
+                if (interpreter.kind(-1) == .function) {
+                    try names.append(arena, name);
+                } else {
+                    interpreter.pushField(-1, "kosmos");
+                    const has_own = interpreter.kind(-1) == .function;
+                    interpreter.pop(1);
+                    if (has_own) try names.append(arena, name);
+                    try reader.appendVariants(-1, try arena.print("{s}.", .{name}), depth + 1, names);
+                }
+            }
+            interpreter.pop(1);
+        }
     }
 
     /// The names of the table of variants at `index`, comma-separated.
@@ -567,4 +614,25 @@ test "a table of functions gives variants, a group standing for its kosmos" {
     fixture.context.variant = &.{"empty"};
     try fixture.expectFailure(source, "empty is a group of variants without a kosmos of its own; give it kosmos = function() ... end");
     try fixture.expectFailure("return { base = 'personal' }", "it has no variants; return a table of functions to give some");
+}
+
+test "variants are listed without calling any, groups by their own kosmos" {
+    var fixture: Fixture = undefined;
+    fixture.init();
+    defer fixture.deinit();
+    const source =
+        \\return {
+        \\    kosmos = function() error("not called") end,
+        \\    light = function() error("not called") end,
+        \\    dark = { kosmos = function() end, soft = function() end },
+        \\    empty = { hard = function() end },
+        \\}
+    ;
+    const names = try variants(&fixture.context, source);
+    try testing.expectEqual(4, names.len);
+    try testing.expectEqualStrings("dark", names[0]);
+    try testing.expectEqualStrings("dark.soft", names[1]);
+    try testing.expectEqualStrings("empty.hard", names[2]);
+    try testing.expectEqualStrings("light", names[3]);
+    try testing.expectEqual(0, (try variants(&fixture.context, "return { base = 'personal' }")).len);
 }

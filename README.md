@@ -46,7 +46,9 @@ or by `elements` yet.
 ## Kosmoi in Lua
 
 A file `kosmoi/<name>.lua` in the config is a kosmos, applied like any other
-(`kosm apply mine`). It returns a table:
+(`kosm apply mine`); so is `kosmoi/<name>/root.lua`, whose folder may also hold Lua variants
+(`kosmoi/<name>/nord.lua`) and Zig ones in a `root.zig` that declares no `kosmos`. It returns a
+table:
 
 ```lua
 local font_size = 13
@@ -115,7 +117,9 @@ declared value (`kosm_base.Look.default`) is a fresh copy each time it is read. 
 
 A table of functions gives variants: `kosm apply mine.image` calls `image`, and `kosmos` is the
 script's own; a table of functions inside it is a group, with a `kosmos` of its own. Each may
-return a tree or a table of `base`, `params` and `overrides`.
+return a tree or a table of `base`, `params` and `overrides`. A variant may not share its name
+with a Zig variant or a script in the kosmos' folder; kosm lists the variants without calling
+them and fails naming both.
 
 Editing a script compiles nothing: it is read when kosm runs. It runs in Lua 5.5 with the `table`,
 `string`, `math`, `utf8` and `coroutine` libraries and the base library without `dofile`,
