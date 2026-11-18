@@ -3,15 +3,19 @@
 const std = @import("std");
 const kosm = @import("kosm");
 const Interpreter = @import("Interpreter.zig");
+const Bridge = @import("Bridge.zig");
 const Lines = @import("Lines.zig");
 const completion = @import("completion.zig");
 
 /// Reads `kosmoi/<name>.lua`. The script runs in Lua 5.5 without the io, os, package and debug
-/// libraries, and returns a table:
+/// libraries, with every Zig kosmos under `kosmoi`, kosm's own types under `kosm` and every
+/// package by its name, and returns the tree a kosmos it called gave
+/// (`local t = kosmoi.personal({ ... }); t.base.kitty.font_size = 12; return t`), or a table:
 /// `return { base = "personal", params = { ... }, overrides = { kitty = { font_size = 11.5 } } }`.
 /// Without `base` it gives `theme = { ... }` instead, and the apps `overrides` names are the
 /// ones applied. A table with names is a set of fields, one running 1..n a list, and
-/// `kosm.null` clears an optional field.
+/// `kosm.null` clears an optional field. A table of functions is a set of variants
+/// (`kosm apply mine.light` calls `light`), its `kosmos` the script's own.
 pub const frontend: kosm.Frontend = .{
     .name = "lua",
     .extensions = &.{".lua"},
@@ -29,6 +33,7 @@ const Field = enum { base, params, theme, overrides };
 fn load(context: *kosm.Frontend.Context, source: []const u8) kosm.Frontend.Error!kosm.Frontend.Script {
     const interpreter = try Interpreter.init();
     defer interpreter.deinit();
+    try Bridge.install(interpreter, context);
     const chunk_name = try context.arena.dupeSentinel(u8, try context.arena.print("={s}", .{context.path}), 0);
     if (interpreter.run(source, chunk_name)) |message| return context.fail("{s}", .{message});
 
@@ -37,7 +42,7 @@ fn load(context: *kosm.Frontend.Context, source: []const u8) kosm.Frontend.Error
         .interpreter = interpreter,
         .lines = try .init(context.arena, source),
     };
-    return reader.script();
+    return reader.built();
 }
 
 /// Turns the script's result, on top of the stack, into kosm's loose values.
@@ -47,10 +52,87 @@ const Reader = struct {
     lines: Lines,
     path: std.ArrayList(Lines.Segment) = .empty,
 
+    /// What the script builds: the variant the context names, when it returns variants.
+    fn built(reader: *Reader) kosm.Frontend.Error!kosm.Frontend.Script {
+        if (reader.isVariants(-1, 0)) {
+            try reader.runVariant();
+        } else if (reader.context.variant.len != 0) {
+            return reader.context.fail("it has no variants; return a table of functions to give some", .{});
+        }
+        return reader.script();
+    }
+
+    /// Whether the value at `index` is a table of variants: functions, or groups of them.
+    fn isVariants(reader: *Reader, index: c_int, depth: usize) bool {
+        const interpreter = reader.interpreter;
+        if (interpreter.kind(index) != .table or depth > max_depth) return false;
+        const position = interpreter.absolute(index);
+        interpreter.reserve(3) catch return false;
+        var count: usize = 0;
+        interpreter.pushNil();
+        while (interpreter.next(position)) {
+            count += 1;
+            const key = interpreter.string(-2);
+            // A table of what the script sets is never one of variants, whatever it holds.
+            const sets = depth == 0 and key != null and std.meta.stringToEnum(Field, key.?) != null;
+            const variant = !sets and key != null and (interpreter.kind(-1) == .function or reader.isVariants(-1, depth + 1));
+            interpreter.pop(1);
+            if (!variant) {
+                interpreter.pop(1);
+                return false;
+            }
+        }
+        return count != 0;
+    }
+
+    /// Replaces the table of variants on top of the stack by what the variant the context
+    /// names returns; a group stands for its `kosmos`.
+    fn runVariant(reader: *Reader) kosm.Frontend.Error!void {
+        const interpreter = reader.interpreter;
+        const arena = reader.context.arena;
+        try interpreter.reserve(@intCast(reader.context.variant.len + 3));
+        var shown: std.ArrayList(u8) = .empty;
+        for (reader.context.variant) |segment| {
+            if (interpreter.kind(-1) == .function) return reader.context.fail("'{s}' is a variant, not a group, so it has no variant '{s}'", .{ shown.items, segment });
+            const names = try reader.variantNames(-1);
+            interpreter.pushField(-1, try arena.dupeSentinel(u8, segment, 0));
+            if (shown.items.len != 0) try shown.append(arena, '.');
+            try shown.appendSlice(arena, segment);
+            if (interpreter.kind(-1) == .nil) return reader.context.fail("it has no variant '{s}'; its variants are {s}", .{ shown.items, names });
+        }
+        if (interpreter.kind(-1) == .table) {
+            interpreter.pushField(-1, "kosmos");
+            if (interpreter.kind(-1) != .function) {
+                const group = if (shown.items.len == 0) "the script" else shown.items;
+                return reader.context.fail("{s} is a group of variants without a kosmos of its own; give it kosmos = function() ... end", .{group});
+            }
+        }
+        if (interpreter.callTop()) |message| return reader.context.fail("{s}", .{message});
+    }
+
+    /// The names of the table of variants at `index`, comma-separated.
+    fn variantNames(reader: *Reader, index: c_int) kosm.Frontend.Error![]const u8 {
+        const interpreter = reader.interpreter;
+        const position = interpreter.absolute(index);
+        var names: std.ArrayList([]const u8) = .empty;
+        interpreter.pushNil();
+        while (interpreter.next(position)) {
+            try names.append(reader.context.arena, try reader.context.arena.dupe(u8, interpreter.string(-2).?));
+            interpreter.pop(1);
+        }
+        std.mem.sort([]const u8, names.items, {}, lessThan);
+        return std.mem.join(reader.context.arena, ", ", names.items);
+    }
+
+    fn lessThan(_: void, left: []const u8, right: []const u8) bool {
+        return std.mem.order(u8, left, right) == .lt;
+    }
+
     fn script(reader: *Reader) kosm.Frontend.Error!kosm.Frontend.Script {
         const interpreter = reader.interpreter;
+        if (Bridge.handleAt(interpreter.state, -1)) |tree| return .{ .tree = tree };
         if (interpreter.kind(-1) != .table) {
-            return reader.context.fail("the script must return a table of base, params, theme and overrides, not {s}", .{describe(interpreter.kind(-1))});
+            return reader.context.fail("the script must return a tree from Zig, a table of variants, or a table of base, params, theme and overrides, not {s}", .{describe(interpreter.kind(-1))});
         }
         const table = interpreter.absolute(-1);
         var result: kosm.Frontend.Script = .{};
@@ -91,8 +173,9 @@ const Reader = struct {
             .float => .{ .float = interpreter.float(-1) },
             .boolean => .{ .boolean = interpreter.boolean(-1) },
             .null_marker => .null,
+            .handle => .{ .handle = Bridge.handleAt(interpreter.state, -1).? },
             .table => try reader.tableValue(),
-            else => |kind| return reader.failAt(reader.path.items, "{s} is {s}; values are strings, numbers, booleans, tables or kosm.null", .{ reader.pathText(), describe(kind) }),
+            else => |kind| return reader.failAt(reader.path.items, "{s} is {s}; values are strings, numbers, booleans, tables, kosm.null or values from Zig", .{ reader.pathText(), describe(kind) }),
         };
         return .{ .value = loose, .origin = origin };
     }
@@ -220,21 +303,7 @@ const Placed = struct {
     }
 };
 
-/// A Lua value's kind, as messages name it.
-fn describe(kind: Interpreter.Kind) []const u8 {
-    return switch (kind) {
-        .nil => "nil",
-        .boolean => "a boolean",
-        .null_marker => "kosm.null",
-        .light_userdata, .userdata => "a userdata",
-        .integer => "an integer",
-        .float => "a number",
-        .string => "a string",
-        .table => "a table",
-        .function => "a function",
-        .thread => "a coroutine",
-    };
-}
+const describe = Interpreter.describe;
 
 const testing = std.testing;
 
@@ -347,12 +416,12 @@ test "bad values fail naming their line and path" {
     var fixture: Fixture = undefined;
     fixture.init();
     defer fixture.deinit();
-    try fixture.expectFailure("return 3", "the script must return a table of base, params, theme and overrides, not an integer");
+    try fixture.expectFailure("return 3", "the script must return a tree from Zig, a table of variants, or a table of base, params, theme and overrides, not an integer");
     try fixture.expectFailure("return {\n  bass = 'x' }", "kosmoi/mine.lua:2: the returned table sets 'bass'; it may set only base, params, theme and overrides");
     try fixture.expectFailure("return {\n  base = 3 }", "kosmoi/mine.lua:2: base names a kosmos, as a string, not an integer");
     try fixture.expectFailure("local size\nreturn { overrides = {\n  kitty = { size = size } } }", "kosmoi/mine.lua:3: overrides.kitty.size is nil; leave the field out, or set it to kosm.null to clear it");
     try fixture.expectFailure("return { overrides = {\n  kitty = { size = sise } } }", "kosmoi/mine.lua:2: 'sise' is not defined");
-    try fixture.expectFailure("return { overrides = {\n  kitty = { size = function() end } } }", "kosmoi/mine.lua:2: overrides.kitty.size is a function; values are strings, numbers, booleans, tables or kosm.null");
+    try fixture.expectFailure("return { overrides = {\n  kitty = { size = function() end } } }", "kosmoi/mine.lua:2: overrides.kitty.size is a function; values are strings, numbers, booleans, tables, kosm.null or values from Zig");
     try fixture.expectFailure("return { overrides = {\n  rofi = { modes = { 'a', x = 1 } } } }", "kosmoi/mine.lua:2: overrides.rofi.modes mixes named fields with list items");
     try fixture.expectFailure("return { overrides = {\n  rofi = { modes = { [1] = 'a', [3] = 'c' } } } }", "kosmoi/mine.lua:2: overrides.rofi.modes has list items with gaps; a list's keys run 1..n");
     try fixture.expectFailure("local t = {}\nt.t = t\nreturn { overrides = t }", "kosmoi/mine.lua:3: overrides.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t.t nests more than 64 tables deep; does a table hold itself?");
@@ -367,4 +436,135 @@ test "a script cannot reach files, the environment or native code" {
     try fixture.expectFailure("return require('x')", "kosmoi/mine.lua:1: 'require' is not defined");
     try fixture.expectFailure("return dofile('/etc/passwd')", "kosmoi/mine.lua:1: 'dofile' is not defined");
     try fixture.expectFailure("return load('return 1')()", "kosmoi/mine.lua:1: 'load' is not defined");
+}
+
+/// A library for tests: `demo.box(size)` gives a handle to a `Box`, whose `grow(by)` method
+/// changes it, and `demo.boxes.small` is a value.
+const test_library = struct {
+    const Box = struct { size: i64 };
+
+    const box_type: kosm.Frontend.Handle.Type = .{
+        .id = kosm.Frontend.Handle.id(Box),
+        .name = "demo.Box",
+        .fields = &.{"size"},
+        .methods = &.{.{ .name = "grow", .call = grow }},
+        .get = get,
+        .set = set,
+        .length = length,
+    };
+
+    fn boxOf(call: *kosm.Frontend.Call, size: i64) kosm.Frontend.Call.Error!kosm.Loose {
+        const box = try call.arena.create(Box);
+        box.* = .{ .size = size };
+        return .{ .value = .{ .handle = .{ .pointer = box, .type = &box_type } } };
+    }
+
+    fn make(call: *kosm.Frontend.Call, arguments: []const kosm.Loose) kosm.Frontend.Call.Error!kosm.Loose {
+        if (arguments.len != 1 or arguments[0].value != .integer) return call.fail("demo.box takes an integer", .{});
+        return boxOf(call, arguments[0].value.integer);
+    }
+
+    fn small(call: *kosm.Frontend.Call, arguments: []const kosm.Loose) kosm.Frontend.Call.Error!kosm.Loose {
+        _ = arguments;
+        return boxOf(call, 1);
+    }
+
+    fn grow(call: *kosm.Frontend.Call, arguments: []const kosm.Loose) kosm.Frontend.Call.Error!kosm.Loose {
+        const box = arguments[0].value.handle.as(Box) orelse return call.fail("not a box", .{});
+        box.size += arguments[1].value.integer;
+        return .{ .value = .null };
+    }
+
+    fn get(call: *kosm.Frontend.Call, pointer: *anyopaque, key: kosm.Frontend.Handle.Key) kosm.Frontend.Call.Error!kosm.Loose {
+        const box: *Box = @ptrCast(@alignCast(pointer));
+        if (key == .field and std.mem.eql(u8, key.field, "size")) return .{ .value = .{ .integer = box.size } };
+        return call.fail("demo.Box has no field '{s}'", .{key.field});
+    }
+
+    fn set(call: *kosm.Frontend.Call, pointer: *anyopaque, key: kosm.Frontend.Handle.Key, value: kosm.Loose) kosm.Frontend.Call.Error!void {
+        const box: *Box = @ptrCast(@alignCast(pointer));
+        if (value.value != .integer) return call.fail("size: expected an integer", .{});
+        _ = key;
+        box.size = value.value.integer;
+    }
+
+    fn length(pointer: *anyopaque) usize {
+        _ = pointer;
+        return 0;
+    }
+
+    const boxes: kosm.Frontend.Namespace = .{ .name = "demo.boxes", .entries = &.{.{ .name = "small", .kind = .{ .constant = .{ .name = "small", .call = small } } }} };
+    const demo: kosm.Frontend.Namespace = .{ .name = "demo", .entries = &.{
+        .{ .name = "box", .kind = .{ .function = .{ .name = "box", .call = make } } },
+        .{ .name = "boxes", .kind = .{ .namespace = &boxes } },
+    } };
+    const library: kosm.Frontend.Library = .{ .globals = &.{&demo} };
+};
+
+test "a script calls Zig functions and returns the value it built, changed through its fields and methods" {
+    var fixture: Fixture = undefined;
+    fixture.init();
+    defer fixture.deinit();
+    fixture.context.library = test_library.library;
+    const script = try fixture.load(
+        \\local box = demo.box(3)
+        \\box.size = box.size + 1
+        \\box:grow(2)
+        \\local small = demo.boxes.small
+        \\small.size = 9
+        \\assert(demo.boxes.small.size == 1)
+        \\return box
+    );
+    try testing.expectEqual(6, script.tree.?.as(test_library.Box).?.size);
+}
+
+test "a failing call, field or namespace raises a Lua error naming the line" {
+    var fixture: Fixture = undefined;
+    fixture.init();
+    defer fixture.deinit();
+    fixture.context.library = test_library.library;
+    try fixture.expectFailure("local box = demo.box(1)\nbox.size = 'big'\n", "kosmoi/mine.lua:2: size: expected an integer");
+    try fixture.expectFailure("local box = demo.box(1)\nbox.size = nil\n", "kosmoi/mine.lua:2: a value set to nil is no value; set it to kosm.null to clear it");
+    try fixture.expectFailure("return demo.bocks(1)", "kosmoi/mine.lua:1: demo has no 'bocks'");
+    try fixture.expectFailure("return demo.box('x')", "kosmoi/mine.lua:1: demo.box takes an integer");
+    try fixture.expectFailure("return demo.box(1).sise", "kosmoi/mine.lua:1: demo.Box has no field 'sise'");
+    try fixture.expectFailure("return demo.box(function() end)", "kosmoi/mine.lua:1: argument 1: it is a function; values are strings, numbers, booleans, tables, kosm.null or values from Zig");
+    try fixture.expectFailure("return demo()", "kosmoi/mine.lua:1: demo is not a function; it holds box, boxes");
+}
+
+test "a handle inside a returned table is a loose handle" {
+    var fixture: Fixture = undefined;
+    fixture.init();
+    defer fixture.deinit();
+    fixture.context.library = test_library.library;
+    const script = try fixture.load("return { base = 'personal', overrides = { box = demo.box(4) } }");
+    try testing.expectEqual(4, (try entryOf(script.overrides.?, "box")).value.handle.as(test_library.Box).?.size);
+}
+
+test "a table of functions gives variants, a group standing for its kosmos" {
+    var fixture: Fixture = undefined;
+    fixture.init();
+    defer fixture.deinit();
+    const source =
+        \\return {
+        \\    kosmos = function() return { base = "personal" } end,
+        \\    light = function() return { base = "personal.light" } end,
+        \\    dark = { kosmos = function() return { base = "dark" } end, soft = function() return { base = "dark.soft" } end },
+        \\    empty = { hard = function() return {} end },
+        \\}
+    ;
+    try testing.expectEqualStrings("personal", (try fixture.load(source)).base.?);
+    fixture.context.variant = &.{"light"};
+    try testing.expectEqualStrings("personal.light", (try fixture.load(source)).base.?);
+    fixture.context.variant = &.{"dark"};
+    try testing.expectEqualStrings("dark", (try fixture.load(source)).base.?);
+    fixture.context.variant = &.{ "dark", "soft" };
+    try testing.expectEqualStrings("dark.soft", (try fixture.load(source)).base.?);
+    fixture.context.variant = &.{"lite"};
+    try fixture.expectFailure(source, "it has no variant 'lite'; its variants are dark, empty, kosmos, light");
+    fixture.context.variant = &.{ "light", "soft" };
+    try fixture.expectFailure(source, "'light' is a variant, not a group, so it has no variant 'soft'");
+    fixture.context.variant = &.{"empty"};
+    try fixture.expectFailure(source, "empty is a group of variants without a kosmos of its own; give it kosmos = function() ... end");
+    try fixture.expectFailure("return { base = 'personal' }", "it has no variants; return a table of functions to give some");
 }

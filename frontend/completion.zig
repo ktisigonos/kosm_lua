@@ -149,20 +149,31 @@ const base_library =
     \\---@type string
     \\_VERSION = "Lua 5.5"
     \\
-    \\---What kosm gives a kosmos.
-    \\---@class kosm
-    \\---@field null kosm.null Clears an optional field, so the program's own default applies.
-    \\kosm = {}
-    \\
     \\---Clears an optional field: `waybar = { spacing = kosm.null }`.
     \\---@class kosm.null
     \\
     \\
 ;
 
+/// The prefix of the class of each namespace of the library: `kosm.library.kosm_kitty`.
+const namespace_prefix = "kosm.library.";
+
 fn writeGlobals(writer: *std.Io.Writer, completion: Completion) std.Io.Writer.Error!void {
     try writer.writeAll(header);
     try writer.writeAll(base_library);
+    const has_kosm = for (completion.namespaces) |namespace| {
+        if (std.mem.eql(u8, namespace.name, "kosm")) break true;
+    } else false;
+    try writer.print(
+        \\---What kosm gives a kosmos.
+        \\---@class kosm{s}{s}
+        \\---@field null kosm.null Clears an optional field, so the program's own default applies.
+        \\kosm = {{}}
+        \\
+        \\
+    , .{ if (has_kosm) ": " ++ namespace_prefix else "", if (has_kosm) "kosm" else "" });
+    try writeNamespaces(writer, completion);
+    try writeKosmoi(writer, completion);
     try writer.print(
         \\---A kosmos building on no other: it gives a theme, and the apps its overrides name are the
         \\---ones applied. Write `---@type kosm.script` above its `return`.
@@ -185,6 +196,171 @@ fn writeGlobals(writer: *std.Io.Writer, completion: Completion) std.Io.Writer.Er
     }
 }
 
+/// A class per namespace, and a global for each without a dot but `kosm`.
+fn writeNamespaces(writer: *std.Io.Writer, completion: Completion) std.Io.Writer.Error!void {
+    for (completion.namespaces) |namespace| {
+        try writeDoc(writer, namespace.doc);
+        try writer.print("---@class {s}{s}\n", .{ namespace_prefix, namespace.name });
+        if (namespace.call) |call| {
+            try writer.writeAll("---@overload ");
+            try writeFunction(writer, completion, call);
+            try writer.writeByte('\n');
+        }
+        for (namespace.functions) |function| {
+            try writer.writeAll("---@field ");
+            try writeFieldName(writer, function.name);
+            try writer.writeByte(' ');
+            try writeFunction(writer, completion, function);
+            try writeTrailingDoc(writer, function.doc);
+        }
+        for (namespace.values) |value| {
+            try writer.writeAll("---@field ");
+            try writeFieldName(writer, value.name);
+            try writer.writeByte(' ');
+            try writeType(writer, completion, value.type.?);
+            try writeTrailingDoc(writer, value.doc);
+        }
+        try writer.writeByte('\n');
+        if (std.mem.findScalar(u8, namespace.name, '.') == null and !std.mem.eql(u8, namespace.name, "kosm")) {
+            try writer.print("---@type {s}{s}\n{s} = {{}}\n\n", .{ namespace_prefix, namespace.name, namespace.name });
+        }
+    }
+}
+
+/// `kosmoi`: each Zig kosmos a function of its parameters giving its tree, each group of
+/// variants a class, callable when the group is a kosmos itself.
+fn writeKosmoi(writer: *std.Io.Writer, completion: Completion) std.Io.Writer.Error!void {
+    try writeKosmoiGroup(writer, completion, "");
+    try writer.print("---Every Zig kosmos of the config, called with its parameters: `kosmoi.personal()`.\n---@type {s}kosmoi\nkosmoi = {{}}\n\n", .{namespace_prefix});
+}
+
+fn writeKosmoiGroup(writer: *std.Io.Writer, completion: Completion, group: []const u8) std.Io.Writer.Error!void {
+    if (group.len == 0) {
+        try writer.print("---@class {s}kosmoi\n", .{namespace_prefix});
+    } else {
+        if (findKosmos(completion, group)) |kosmos| try writeDoc(writer, kosmos.doc);
+        try writer.print("---@class {s}kosmoi.{s}\n", .{ namespace_prefix, group });
+        if (findKosmos(completion, group)) |kosmos| {
+            try writer.writeAll("---@overload ");
+            try writeKosmosFunction(writer, kosmos);
+            try writer.writeByte('\n');
+        }
+    }
+    // Each direct child once: the first kosmos naming it.
+    for (completion.kosmoi, 0..) |kosmos, index| {
+        const child = childOf(group, kosmos.name) orelse continue;
+        const seen = for (completion.kosmoi[0..index]) |earlier| {
+            const other = childOf(group, earlier.name) orelse continue;
+            if (std.mem.eql(u8, other, child)) break true;
+        } else false;
+        if (seen) continue;
+        const child_name = kosmos.name[0 .. (if (group.len == 0) 0 else group.len + 1) + child.len];
+        try writer.writeAll("---@field ");
+        try writeFieldName(writer, child);
+        if (isGroup(completion, child_name)) {
+            try writer.print(" {s}kosmoi.{s}\n", .{ namespace_prefix, child_name });
+        } else {
+            try writer.writeByte(' ');
+            try writeKosmosFunction(writer, findKosmos(completion, child_name).?);
+            try writeTrailingDoc(writer, findKosmos(completion, child_name).?.doc);
+        }
+    }
+    try writer.writeByte('\n');
+    for (completion.kosmoi, 0..) |kosmos, index| {
+        const child = childOf(group, kosmos.name) orelse continue;
+        const child_name = kosmos.name[0 .. (if (group.len == 0) 0 else group.len + 1) + child.len];
+        const seen = for (completion.kosmoi[0..index]) |earlier| {
+            const other = childOf(group, earlier.name) orelse continue;
+            if (std.mem.eql(u8, other, child)) break true;
+        } else false;
+        if (!seen and isGroup(completion, child_name)) try writeKosmoiGroup(writer, completion, child_name);
+    }
+}
+
+/// The name of the child of `group` that `name` is or lies in, or null when it is outside it.
+fn childOf(group: []const u8, name: []const u8) ?[]const u8 {
+    var rest = name;
+    if (group.len != 0) {
+        if (!std.mem.startsWith(u8, name, group) or name.len <= group.len or name[group.len] != '.') return null;
+        rest = name[group.len + 1 ..];
+    }
+    return rest[0 .. std.mem.findScalar(u8, rest, '.') orelse rest.len];
+}
+
+fn isGroup(completion: Completion, name: []const u8) bool {
+    for (completion.kosmoi) |kosmos| {
+        if (kosmos.name.len > name.len and std.mem.startsWith(u8, kosmos.name, name) and kosmos.name[name.len] == '.') return true;
+    }
+    return false;
+}
+
+fn findKosmos(completion: Completion, name: []const u8) ?Completion.Kosmos {
+    for (completion.kosmoi) |kosmos| {
+        if (std.mem.eql(u8, kosmos.name, name)) return kosmos;
+    }
+    return null;
+}
+
+fn writeKosmosFunction(writer: *std.Io.Writer, kosmos: Completion.Kosmos) std.Io.Writer.Error!void {
+    if (kosmos.params) |params| return writer.print("fun(params?: {s}): {s}", .{ params, kosmos.tree });
+    try writer.print("fun(): {s}", .{kosmos.tree});
+}
+
+/// `fun(theme: kosm.Theme): kosm_kitty.App`.
+fn writeFunction(writer: *std.Io.Writer, completion: Completion, function: Completion.Function) std.Io.Writer.Error!void {
+    try writer.writeAll("fun(");
+    for (function.parameters, 0..) |parameter, index| {
+        if (index != 0) try writer.writeAll(", ");
+        try writer.print("{s}: ", .{parameter.name});
+        if (parameter.type) |parameter_type| try writeType(writer, completion, parameter_type) else try writer.writeAll("any");
+    }
+    try writer.writeByte(')');
+    if (function.result) |result| {
+        try writer.writeAll(": ");
+        try writeType(writer, completion, result);
+    }
+}
+
+/// `function record:name(...) end` with its doc, parameters and result; the first parameter
+/// is the value itself. A color field is spelled `string|kosm.Color`, though reading one always
+/// gives a `kosm.Color`, so a color's methods take that spelling as `self`.
+fn writeMethod(writer: *std.Io.Writer, completion: Completion, record: []const u8, method: Completion.Function) std.Io.Writer.Error!void {
+    try writeDoc(writer, method.doc);
+    if (std.mem.eql(u8, record, "kosm.Color")) {
+        try writer.writeAll("---@param self ");
+        try writeType(writer, completion, .color);
+        try writer.writeByte('\n');
+    }
+    const rest = if (method.parameters.len == 0) method.parameters else method.parameters[1..];
+    for (rest) |parameter| {
+        try writer.print("---@param {s} ", .{parameter.name});
+        if (parameter.type) |parameter_type| try writeType(writer, completion, parameter_type) else try writer.writeAll("any");
+        try writer.writeByte('\n');
+    }
+    if (method.result) |result| {
+        try writer.writeAll("---@return ");
+        try writeType(writer, completion, result);
+        try writer.writeByte('\n');
+    }
+    try writer.writeAll("function record:");
+    try writer.writeAll(method.name);
+    try writer.writeByte('(');
+    for (rest, 0..) |parameter, index| {
+        if (index != 0) try writer.writeAll(", ");
+        try writer.writeAll(parameter.name);
+    }
+    try writer.writeAll(") end\n\n");
+}
+
+/// A doc after a `---@field` on its line, then the line's end.
+fn writeTrailingDoc(writer: *std.Io.Writer, doc: ?[]const u8) std.Io.Writer.Error!void {
+    if (doc) |text| {
+        try writer.writeByte(' ');
+        try writeOneLine(writer, text);
+    }
+    try writer.writeByte('\n');
+}
+
 fn writeTypes(writer: *std.Io.Writer, completion: Completion) std.Io.Writer.Error!void {
     try writer.writeAll(header);
     for (completion.records) |record| {
@@ -194,24 +370,29 @@ fn writeTypes(writer: *std.Io.Writer, completion: Completion) std.Io.Writer.Erro
             try writer.writeAll("---@field ");
             try writeFieldName(writer, field.name);
             try writer.writeAll("? ");
-            try writeType(writer, field.type.?);
-            if (field.doc) |doc| {
-                try writer.writeByte(' ');
-                try writeOneLine(writer, doc);
-            }
-            try writer.writeByte('\n');
+            try writeType(writer, completion, field.type.?);
+            try writeTrailingDoc(writer, field.doc);
+        }
+        if (record.methods.len != 0) {
+            // Methods are functions of the class, not fields, so a table of the record's
+            // fields misses none of them.
+            try writer.writeAll("local record = {}\n\n");
+            for (record.methods) |method| try writeMethod(writer, completion, record.name, method);
         }
         try writer.writeByte('\n');
     }
 }
 
 /// A type as LuaLS spells it: `integer`, `"block"|"beam"`, `kosm_kitty.App[]`, `number|kosm.null`.
-fn writeType(writer: *std.Io.Writer, field_type: Completion.Type) std.Io.Writer.Error!void {
+/// A color reads back as a `kosm.Color` from Zig, when the completion describes that class.
+fn writeType(writer: *std.Io.Writer, completion: Completion, field_type: Completion.Type) std.Io.Writer.Error!void {
     switch (field_type) {
         .boolean => try writer.writeAll("boolean"),
         .integer => try writer.writeAll("integer"),
         .number => try writer.writeAll("number"),
-        .text, .color, .color_or_hue, .path => try writer.writeAll("string"),
+        .text, .path => try writer.writeAll("string"),
+        .color, .color_or_hue => try writer.writeAll(if (completion.find("kosm.Color") != null) "string|kosm.Color" else "string"),
+        .namespace => |name| try writer.print("{s}{s}", .{ namespace_prefix, name }),
         .value => try writer.writeAll("any"),
         .choice => |names| for (names, 0..) |name, index| {
             if (index != 0) try writer.writeByte('|');
@@ -223,7 +404,7 @@ fn writeType(writer: *std.Io.Writer, field_type: Completion.Type) std.Io.Writer.
                 try writer.writeAll("{ ");
                 try writeFieldName(writer, tag.name);
                 try writer.writeAll(": ");
-                try writeType(writer, payload);
+                try writeType(writer, completion, payload);
                 try writer.writeAll(" }");
             } else {
                 try writer.print("\"{s}\"", .{tag.name});
@@ -233,12 +414,12 @@ fn writeType(writer: *std.Io.Writer, field_type: Completion.Type) std.Io.Writer.
         .list => |item| {
             const grouped = isUnion(item.*);
             if (grouped) try writer.writeByte('(');
-            try writeType(writer, item.*);
+            try writeType(writer, completion, item.*);
             if (grouped) try writer.writeByte(')');
             try writer.writeAll("[]");
         },
         .optional => |child| {
-            try writeType(writer, child.*);
+            try writeType(writer, completion, child.*);
             try writer.writeAll("|kosm.null");
         },
     }
@@ -341,4 +522,48 @@ test "records become classes with typed, documented fields, and kosmoi script cl
         \\
     ) != null);
     try testing.expect(std.mem.find(u8, globals, "---@class kosm.on.plain\n---@field base string The kosmos it builds on: \"plain\", or a script building on it.\n---@field overrides? plain.Tree") != null);
+}
+
+test "namespaces, kosmoi and methods become classes, globals and function fields" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const app: Completion.Type = .{ .record = "kosm_kitty.App" };
+    const theme: Completion.Type = .{ .record = "kosm.Theme" };
+    const completion: Completion = .{
+        .records = &.{
+            .{ .name = "kosm.Color", .fields = &.{}, .methods = &.{.{ .name = "mix", .doc = "Mixes two colors.", .parameters = &.{ .{ .name = "color", .type = .color }, .{ .name = "other", .type = .color } }, .result = .color }} },
+        },
+        .kosmoi = &.{
+            .{ .name = "personal", .doc = "My own.", .params = "personal.Params", .tree = "personal.Apps" },
+            .{ .name = "personal.light", .tree = "personal.Apps" },
+            .{ .name = "frost.iced", .tree = "frost.Tree" },
+        },
+        .standalone = "kosm.Standalone",
+        .theme = "kosm.Theme.Input",
+        .namespaces = &.{
+            .{ .name = "kosm", .values = &.{.{ .name = "Theme", .type = .{ .namespace = "kosm.Theme" } }} },
+            .{ .name = "kosm.Theme", .functions = &.{.{ .name = "from", .parameters = &.{.{ .name = "input", .type = .{ .record = "kosm.Theme.Input" } }}, .result = theme }} },
+            .{ .name = "kosm_kitty", .doc = "kitty.", .functions = &.{.{ .name = "from", .doc = "kitty from a theme.", .parameters = &.{.{ .name = "theme", .type = theme }}, .result = app }}, .values = &.{.{ .name = "default", .type = app }} },
+        },
+    };
+    const files = try complete(arena, completion);
+    const globals = files[0].contents;
+    const expected = [_][]const u8{
+        "---@class kosm: kosm.library.kosm\n",
+        "---@class kosm.library.kosm.Theme\n---@field from fun(input: kosm.Theme.Input): kosm.Theme\n",
+        "---kitty.\n---@class kosm.library.kosm_kitty\n---@field from fun(theme: kosm.Theme): kosm_kitty.App kitty from a theme.\n---@field default kosm_kitty.App\n\n---@type kosm.library.kosm_kitty\nkosm_kitty = {}\n",
+        "---@class kosm.library.kosmoi\n---@field personal kosm.library.kosmoi.personal\n---@field frost kosm.library.kosmoi.frost\n",
+        "---My own.\n---@class kosm.library.kosmoi.personal\n---@overload fun(params?: personal.Params): personal.Apps\n---@field light fun(): personal.Apps\n",
+        "---@class kosm.library.kosmoi.frost\n---@field iced fun(): frost.Tree\n",
+        "---@type kosm.library.kosmoi\nkosmoi = {}\n",
+    };
+    for (expected) |part| {
+        if (std.mem.find(u8, globals, part) == null) {
+            std.debug.print("missing:\n{s}\nin:\n{s}\n", .{ part, globals });
+            return error.TestMissingAnnotation;
+        }
+    }
+    try testing.expect(std.mem.find(u8, globals, "\nkosm = {}") != null);
+    try testing.expect(std.mem.find(u8, files[1].contents, "---@class kosm.Color\nlocal record = {}\n\n---Mixes two colors.\n---@param self string|kosm.Color\n---@param other string|kosm.Color\n---@return string|kosm.Color\nfunction record:mix(other) end\n") != null);
 }

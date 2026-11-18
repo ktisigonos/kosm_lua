@@ -64,6 +64,12 @@ pub fn deinit(interpreter: Interpreter) void {
 /// failure returns Lua's message ("kosmoi/a.lua:3: ..."), valid until the next call.
 pub fn run(interpreter: Interpreter, source: []const u8, name: [:0]const u8) ?[]const u8 {
     if (c.luaL_loadbufferx(interpreter.state, source.ptr, source.len, name, "t") != c.LUA_OK) return interpreter.errorMessage();
+    return interpreter.callTop();
+}
+
+/// Calls the function on top of the stack with no arguments, leaving its first result in its
+/// place. On failure returns Lua's message, valid until the next call.
+pub fn callTop(interpreter: Interpreter) ?[]const u8 {
     if (c.lua_pcallk(interpreter.state, 0, 1, 0, 0, null) != c.LUA_OK) return interpreter.errorMessage();
     return null;
 }
@@ -74,7 +80,27 @@ fn errorMessage(interpreter: Interpreter) []const u8 {
 }
 
 /// What a stack slot holds.
-pub const Kind = enum { nil, boolean, null_marker, light_userdata, integer, float, string, table, function, userdata, thread };
+pub const Kind = enum { nil, boolean, null_marker, light_userdata, integer, float, string, table, function, userdata, handle, thread };
+
+/// The registry name of the metatable every handle to a Zig value has.
+pub const handle_metatable = "kosm.handle";
+
+/// A value's kind, as messages name it.
+pub fn describe(value_kind: Kind) []const u8 {
+    return switch (value_kind) {
+        .nil => "nil",
+        .boolean => "a boolean",
+        .null_marker => "kosm.null",
+        .light_userdata, .userdata => "a userdata",
+        .handle => "a value from Zig",
+        .integer => "an integer",
+        .float => "a number",
+        .string => "a string",
+        .table => "a table",
+        .function => "a function",
+        .thread => "a coroutine",
+    };
+}
 
 /// What the value at `index` is.
 pub fn kind(interpreter: Interpreter, index: c_int) Kind {
@@ -86,7 +112,7 @@ pub fn kind(interpreter: Interpreter, index: c_int) Kind {
         c.LUA_TSTRING => .string,
         c.LUA_TTABLE => .table,
         c.LUA_TFUNCTION => .function,
-        c.LUA_TUSERDATA => .userdata,
+        c.LUA_TUSERDATA => if (c.luaL_testudata(interpreter.state, index, handle_metatable) != null) .handle else .userdata,
         else => .thread,
     };
 }
