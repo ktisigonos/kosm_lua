@@ -1,6 +1,7 @@
 # kosm_lua
 
-Lua for kosm: the `lua` adapter, claiming `.lua` files and enabling `edit`.
+Lua for kosm: the `lua` adapter, claiming `.lua` files and enabling `edit`, and the `lua`
+frontend, for kosmoi written in Lua.
 
 ```zig
 var file = try output.edit(.{ .files = "~/.config/hypr/defs.lua" });
@@ -41,3 +42,47 @@ Only the value's bytes change; comments, spacing and key order stay as they are.
 
 Paths name keys only. Positional table entries (`{ "a", "b" }`) aren't reached by paths
 or by `elements` yet.
+
+## Kosmoi in Lua
+
+A file `kosmoi/<name>.lua` in the config is a kosmos, applied like any other
+(`kosm apply mine`). It returns a table:
+
+```lua
+local font_size = 13
+
+return {
+    base = "personal",                        -- the kosmos it builds on, Zig or Lua
+    params = { wallpaper = "walls/dune.png" }, -- the base's Params
+    overrides = {                             -- values set on the base's tree
+        base = {
+            kitty = { fonts = { font_size = font_size + 0.5 } },
+            waybar = { spacing = kosm.null },
+        },
+    },
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `base` | the kosmos it builds on, as `kosm apply` spells it; without one it builds on none |
+| `params` | the base's `Params`, below the command line's; relative paths start from `kosmoi/` |
+| `theme` | without a base: the theme's input (`palette`, `mode`, `roles`, ...) |
+| `overrides` | values set on the tree; without a base, the apps it names are the ones applied |
+
+A table with names sets fields, one with items `1..n` is a list, and `kosm.null` clears an
+optional field, since a field set to `nil` is no field at all. A string also names an enum value
+or a color (`"dark"`, `"#88c0d0"`), and an integer fits a number field.
+
+Editing a script compiles nothing: it is read when kosm runs. It runs in Lua 5.5 with the `table`,
+`string`, `math`, `utf8` and `coroutine` libraries and the base library without `dofile`,
+`loadfile`, `load` and `print`; `io`, `os`, `package` and `debug` are not there at all, as a
+kosmos reaches no files or programs.
+
+Errors name the script and line: Lua's own, a value of the wrong type (`kosmoi/mine.lua:5:
+base.kitty.fonts.font_size: expected a number, got the string 'big'`), a name that is not defined
+(a misspelled variable would otherwise be `nil`), and a field written in the script whose value is
+`nil`. A value built in a `local` takes the line of the field holding it.
+
+The frontend is a module of its own, `kosm_lua_frontend`: packages using only the adapter
+(`kosm_hyprland`, `kosm_nvim`) never fetch or build Lua.
