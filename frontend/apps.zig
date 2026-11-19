@@ -19,7 +19,7 @@ const Loose = kosm.Loose;
 /// named while kosm reads what an app declares (`kosm_cursor.App`).
 const type_metatable = "kosm.type";
 const reference_metatable = "kosm.reference";
-/// The registry field holding each app script's returned table by its path.
+/// The registry field holding each app or adapter script's returned table by its path.
 const apps_field = "kosm.apps";
 
 /// How deep a field's types may nest (`kosm.list(kosm.optional(...))`).
@@ -88,7 +88,14 @@ pub fn declare(context: *Context, source: []const u8) Error!Declaration {
 /// process ending closes it.
 var shared: ?Interpreter = null;
 
-/// Calls `function` of the app script at `context.path`, running the script on its first call.
+/// What the script at `path` returns, for messages: an adapter's in `adapters/`, else an app's.
+fn shapeOf(path: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, path, "adapters/")) return "an adapter's script returns a table with name, extensions and the capabilities it gives";
+    return "an app's script returns a table with App, from, apply and maybe reload";
+}
+
+/// Calls `function` of the app or adapter script at `context.path`, running the script on its
+/// first call.
 pub fn call(context: *Context, source: []const u8, function: []const u8, arguments: []const Loose) Error!Loose {
     const interpreter = shared orelse started: {
         const started = try Interpreter.init();
@@ -108,7 +115,7 @@ pub fn call(context: *Context, source: []const u8, function: []const u8, argumen
     try pushApp(interpreter, context, source);
     const name = try context.arena.dupeSentinel(u8, function, 0);
     interpreter.pushField(-1, name);
-    if (interpreter.kind(-1) != .function) return context.fail("{s} gives no function '{s}'; an app's script returns a table with App, from, apply and maybe reload", .{ context.path, function });
+    if (interpreter.kind(-1) != .function) return context.fail("{s} gives no function '{s}'; {s}", .{ context.path, function, shapeOf(context.path) });
     for (arguments) |argument| try Bridge.push(interpreter, context, argument);
     if (c.lua_pcallk(state, @intCast(arguments.len), 1, 0, 0, null) != c.LUA_OK)
         return context.fail("{s}", .{interpreter.string(-1) orelse "the script raised an error that is not a string"});
@@ -116,8 +123,8 @@ pub fn call(context: *Context, source: []const u8, function: []const u8, argumen
     return Bridge.read(interpreter, context, -1);
 }
 
-/// Pushes the table the app script `source` returns, running it the first time, in an
-/// environment of its own so two apps' globals never meet.
+/// Pushes the table the app or adapter script `source` returns, running it the first time, in an
+/// environment of its own so two scripts' globals never meet.
 fn pushApp(interpreter: Interpreter, context: *Context, source: []const u8) Error!void {
     const state = interpreter.state;
     _ = c.lua_getfield(state, c.LUA_REGISTRYINDEX, apps_field);
@@ -146,7 +153,7 @@ fn pushApp(interpreter: Interpreter, context: *Context, source: []const u8) Erro
     _ = c.lua_setupvalue(state, -2, 1);
     if (c.lua_pcallk(state, 0, 1, 0, 0, null) != c.LUA_OK)
         return context.fail("{s}", .{interpreter.string(-1) orelse "the script raised an error that is not a string"});
-    if (interpreter.kind(-1) != .table) return context.fail("{s} returns {s}; an app's script returns a table with App, from, apply and maybe reload", .{ context.path, Interpreter.describe(interpreter.kind(-1)) });
+    if (interpreter.kind(-1) != .table) return context.fail("{s} returns {s}; {s}", .{ context.path, Interpreter.describe(interpreter.kind(-1)), shapeOf(context.path) });
     c.lua_pushvalue(state, -1);
     c.lua_setfield(state, -3, path);
     c.lua_rotate(state, -2, 1);

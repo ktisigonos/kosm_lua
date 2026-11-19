@@ -195,5 +195,42 @@ fields rebuilds once. While kosm reads the declaration no Zig code runs, so a ca
 functions fails naming its line. Every app's script runs in one Lua state, each with globals of its
 own. A Lua table has no order, so the tables an app writes come sorted by key.
 
+## Adapters in Lua
+
+An adapter is `adapters/<name>.lua`, or `adapters/<name>/root.lua`. It returns its data and the
+capabilities it gives, each a function and each optional:
+
+```lua
+return {
+    name = "keys",                     -- the language apps pass as `lang`
+    extensions = { ".keys" },
+    comment = { line = "#" },          -- or { block = { open = "/*", close = "*/" } }
+    default_format = { boolean = "yes_no" }, -- color, boolean, float_precision
+    format = function(value) ... end,  -- returns the value's text
+    parser = function(source) ... end, -- returns the root node
+    serialize = function(root) ... end, -- returns the whole file
+    insert = function(source, parent, key, value) ... end, -- returns the insertions
+}
+```
+
+A value is `{ kind = "string", value = "text" }`, `kind` naming what it is: `string`, `integer`,
+`float`, `boolean`, `color`, `raw`, `table`, `list` or `joined`. A boolean, float or color also
+has `text`, already spelled in the file's format, and a color's `value` is a `kosm.Color`. A
+table's `value` is a list of `{ key = "name", value = <value> }` in order; a list's and a joined
+value's is a list of values.
+
+A node is `{ key = "size", kind = "scalar", position = 1, value = { 8, 9 }, children = { ... } }`:
+`kind` is `table`, `list` or `scalar`, `position` where the entry starts, and `value` the first and
+last byte of its value, as `string.find` returns them and `string.sub` takes them. `key` is left
+out for list elements and the root, `value` for a table that has no bytes of its own, `children`
+for none. `insert` gets a node back as `parser` gave it, `key` nil for a list element, and returns
+`{ { range = { first, last }, content = "text" } }`; a range adding bytes before position `p` is
+`{ p, p - 1 }`.
+
+A capability fails by raising an error (`error("cannot read 'x'")`), reported with the file and
+the script's line. As for an app, kosm reads the declaration when it builds and generates the
+adapter's Zig module, so Zig and Lua apps write through it alike, and editing a function compiles
+nothing.
+
 The frontend is a module of its own, `kosm_lua_frontend`: packages using only the adapter
 (`kosm_hyprland`, `kosm_nvim`) never fetch or build Lua.

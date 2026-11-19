@@ -93,8 +93,8 @@ pub fn read(interpreter: Interpreter, context: *Frontend.Context, index: c_int) 
     };
 }
 
-/// Pushes `value`, as a call into Zig gives back its result: tables are refused, since only
-/// scripts give them.
+/// Pushes `value`, as a call into Zig gives back its result or kosm hands a script its
+/// arguments: a table as a table, a list as a sequence counting from 1.
 pub fn push(interpreter: Interpreter, context: *Frontend.Context, value: Loose) Frontend.Error!void {
     var session: Session = .{ .state = interpreter.state, .context = context };
     return session.push(value) catch |err| switch (err) {
@@ -282,7 +282,21 @@ const Session = struct {
             .float => |float| c.lua_pushnumber(state, float),
             .string, .text => |text| _ = c.lua_pushlstring(state, text.ptr, text.len),
             .handle => |handle| pushHandle(state, handle),
-            .table, .list => return session.fail("kosm gave a table, which only scripts give", .{}),
+            .table => |entries| {
+                c.lua_createtable(state, 0, @intCast(entries.len));
+                for (entries) |entry| {
+                    _ = c.lua_pushlstring(state, entry.key.ptr, entry.key.len);
+                    try session.push(entry.value);
+                    c.lua_rawset(state, -3);
+                }
+            },
+            .list => |items| {
+                c.lua_createtable(state, @intCast(items.len), 0);
+                for (items, 1..) |item, position| {
+                    try session.push(item);
+                    c.lua_rawseti(state, -2, @intCast(position));
+                }
+            },
         }
     }
 };
