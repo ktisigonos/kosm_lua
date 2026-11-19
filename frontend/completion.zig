@@ -332,7 +332,8 @@ fn writeFunction(writer: *std.Io.Writer, completion: Completion, function: Compl
     try writer.writeAll("fun(");
     for (function.parameters, 0..) |parameter, index| {
         if (index != 0) try writer.writeAll(", ");
-        try writer.print("{s}: ", .{parameter.name});
+        try writeParameterName(writer, parameter.name);
+        try writer.writeAll(": ");
         if (parameter.type) |parameter_type| try writeType(writer, completion, parameter_type) else try writer.writeAll("any");
     }
     try writer.writeByte(')');
@@ -354,7 +355,9 @@ fn writeMethod(writer: *std.Io.Writer, completion: Completion, record: []const u
     }
     const rest = if (method.parameters.len == 0) method.parameters else method.parameters[1..];
     for (rest) |parameter| {
-        try writer.print("---@param {s} ", .{parameter.name});
+        try writer.writeAll("---@param ");
+        try writeParameterName(writer, parameter.name);
+        try writer.writeByte(' ');
         if (parameter.type) |parameter_type| try writeType(writer, completion, parameter_type) else try writer.writeAll("any");
         try writer.writeByte('\n');
     }
@@ -363,12 +366,19 @@ fn writeMethod(writer: *std.Io.Writer, completion: Completion, record: []const u
         try writeType(writer, completion, result);
         try writer.writeByte('\n');
     }
-    try writer.writeAll("function record:");
-    try writer.writeAll(method.name);
-    try writer.writeByte('(');
-    for (rest, 0..) |parameter, index| {
-        if (index != 0) try writer.writeAll(", ");
-        try writer.writeAll(parameter.name);
+    // `record:end()` does not parse, so a reserved name is a field holding the function.
+    if (isReserved(method.name)) {
+        try writer.print("record[\"{s}\"] = function(self", .{method.name});
+        for (rest) |parameter| {
+            try writer.writeAll(", ");
+            try writeParameterName(writer, parameter.name);
+        }
+    } else {
+        try writer.print("function record:{s}(", .{method.name});
+        for (rest, 0..) |parameter, index| {
+            if (index != 0) try writer.writeAll(", ");
+            try writeParameterName(writer, parameter.name);
+        }
     }
     try writer.writeAll(") end\n\n");
 }
@@ -463,11 +473,22 @@ const reserved_words = [_][]const u8{
     "while",
 };
 
-fn writeFieldName(writer: *std.Io.Writer, name: []const u8) std.Io.Writer.Error!void {
+fn isReserved(name: []const u8) bool {
     for (reserved_words) |word| {
-        if (std.mem.eql(u8, word, name)) return writer.print("[\"{s}\"]", .{name});
+        if (std.mem.eql(u8, word, name)) return true;
     }
+    return false;
+}
+
+fn writeFieldName(writer: *std.Io.Writer, name: []const u8) std.Io.Writer.Error!void {
+    if (isReserved(name)) return writer.print("[\"{s}\"]", .{name});
     try writer.writeAll(name);
+}
+
+/// A parameter named by a reserved word gets a `_` after it: `end_`.
+fn writeParameterName(writer: *std.Io.Writer, name: []const u8) std.Io.Writer.Error!void {
+    try writer.writeAll(name);
+    if (isReserved(name)) try writer.writeByte('_');
 }
 
 /// A doc comment as `---` lines above a declaration.
@@ -589,4 +610,37 @@ test "namespaces, kosmoi and methods become classes, globals and function fields
     }
     try testing.expect(std.mem.find(u8, globals, "\nkosm = {}") != null);
     try testing.expect(std.mem.find(u8, files[1].contents, "---@class kosm.Color\nlocal record = {}\n\n---Mixes two colors.\n---@param self string|kosm.Color\n---@param other string|kosm.Color\n---@return string|kosm.Color\nfunction record:mix(other) end\n") != null);
+}
+
+test "names Lua reserves are spelled so Lua reads them: end_ for a parameter, a field for a method" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const completion: Completion = .{
+        .records = &.{
+            .{ .name = "kosm.Span", .fields = &.{}, .methods = &.{
+                .{ .name = "end", .parameters = &.{ .{ .name = "span", .type = .integer }, .{ .name = "until", .type = .integer } } },
+                .{ .name = "grow", .parameters = &.{ .{ .name = "span", .type = .integer }, .{ .name = "and", .type = .integer } } },
+            } },
+        },
+        .kosmoi = &.{},
+        .standalone = "kosm.Standalone",
+        .theme = "kosm.Theme.Input",
+        .namespaces = &.{
+            .{ .name = "kosm_span", .functions = &.{.{ .name = "cut", .parameters = &.{.{ .name = "end", .type = .integer }} }} },
+        },
+    };
+    var context: kosm.Frontend.Context = .{ .arena = arena, .path = "lua" };
+    const files = try complete(&context, completion);
+    const expected = [_][]const u8{
+        "---@field cut fun(end_: integer)\n",
+        "---@param until_ integer\nrecord[\"end\"] = function(self, until_) end\n",
+        "---@param and_ integer\nfunction record:grow(and_) end\n",
+    };
+    for (expected) |text| {
+        if (std.mem.find(u8, files[0].contents, text) == null and std.mem.find(u8, files[1].contents, text) == null) {
+            std.debug.print("missing:\n{s}\nin:\n{s}\n{s}\n", .{ text, files[0].contents, files[1].contents });
+            return error.TestExpectedEqual;
+        }
+    }
 }
