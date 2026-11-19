@@ -1,7 +1,7 @@
 # kosm_lua
 
 Lua for kosm: the `lua` adapter, claiming `.lua` files and enabling `edit`, and the `lua`
-frontend, for kosmoi written in Lua.
+frontend, for kosmoi, apps, adapters and frontends written in Lua.
 
 ```zig
 var file = try output.edit(.{ .files = "~/.config/hypr/defs.lua" });
@@ -234,6 +234,36 @@ A capability fails by raising an error (`error("cannot read 'x'")`), reported wi
 the script's line. As for an app, kosm reads the declaration when it builds and generates the
 adapter's Zig module, so Zig and Lua apps write through it alike, and editing a function compiles
 nothing.
+
+## Frontends in Lua
+
+A frontend reads kosmoi written in another language. It is `frontends/<name>.lua`, or
+`frontends/<name>/root.lua`, and returns its data and functions; only `load` is required:
+
+```lua
+return {
+    name = "json",                     -- its completion goes to zig-out/completions/json/
+    extensions = { ".json" },          -- kosmoi/<name>.json is read through it
+    editor_file = { path = ".jsonrc", contents = "{}\n" }, -- created in the config if missing
+    load = function(source, path, variant) ... end, -- returns the kosmos' table
+    variants = function(source, path) ... end,      -- returns the variants' names
+    complete = function(completion) ... end,        -- returns { { path = ..., contents = ... } }
+}
+```
+
+`load` gets the kosmos' text, its place (`"kosmoi/mine.json"`) and the variant to build as a list
+of names (`{ "dark", "soft" }` for `mine.dark.soft`, empty for the kosmos itself), and returns what
+a Lua kosmos returns: `base`, `params`, `theme` and `overrides`, or `tree`. Wrap each value in
+`kosm.at(path .. ":" .. line, value)`, so kosm's messages about it name that line. An error starting
+with the kosmos' place (`error(path .. ":3: expected a value", 0)`) is reported there alone.
+`variants` lists every variant without building any (`{ "dark", "dark.soft" }`). `complete` gets
+every type a script may set, as tables: `records`, `kosmoi`, `standalone`, `theme` and
+`namespaces`, each field's `type` a table of `kind` and, for those holding more, `value`
+(`{ kind = "list", value = { kind = "color" } }`); a field left out is null.
+
+As for an adapter, kosm generates the frontend's Zig module from what it declares, so editing a
+function compiles nothing. A frontend written in Lua reads kosmoi only; apps and adapters in its
+language need one written in Zig.
 
 The frontend is a module of its own, `kosm_lua_frontend`: packages using only the adapter
 (`kosm_hyprland`, `kosm_nvim`) never fetch or build Lua.

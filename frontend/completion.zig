@@ -32,7 +32,8 @@ pub const editor_file: Completion.File = .{
 
 /// Writes `kosm.lua`, declaring the globals a kosmos has and a class per script shape, and
 /// `types.lua`, a class per record.
-pub fn complete(arena: std.mem.Allocator, completion: Completion) std.mem.Allocator.Error![]const Completion.File {
+pub fn complete(context: *kosm.Frontend.Context, completion: Completion) kosm.Frontend.Error![]const Completion.File {
+    const arena = context.arena;
     var globals: std.Io.Writer.Allocating = .init(arena);
     writeGlobals(&globals.writer, completion) catch return error.OutOfMemory;
     var types: std.Io.Writer.Allocating = .init(arena);
@@ -181,6 +182,7 @@ fn writeGlobals(writer: *std.Io.Writer, completion: Completion) std.Io.Writer.Er
         \\---What kosm gives a kosmos.
         \\---@class kosm{s}{s}
         \\---@field null kosm.null Clears an optional field, so the program's own default applies.
+        \\---@field at fun(place: string, value: any): any `value`, written at `place` (`"kosmoi/mine.json:3"`), which kosm's messages about it name. For frontends written in Lua.
         \\---@field boolean kosm.type An app's field holding true or false: `kosm.boolean(true)`.
         \\---@field integer kosm.type An app's field holding a whole number: `kosm.integer(0)`.
         \\---@field float kosm.type An app's field holding a number: `kosm.float(1.5)`.
@@ -514,7 +516,8 @@ test "records become classes with typed, documented fields, and kosmoi script cl
         .standalone = "kosm.Standalone",
         .theme = "kosm.Theme.Input",
     };
-    const files = try complete(arena, completion);
+    var context: kosm.Frontend.Context = .{ .arena = arena, .path = "lua" };
+    const files = try complete(&context, completion);
     try testing.expectEqualStrings("kosm.lua", files[0].path);
     try testing.expectEqualStrings(header ++
         \\---kitty's settings.
@@ -566,7 +569,8 @@ test "namespaces, kosmoi and methods become classes, globals and function fields
             .{ .name = "kosm_kitty", .doc = "kitty.", .functions = &.{.{ .name = "from", .doc = "kitty from a theme.", .parameters = &.{.{ .name = "theme", .type = theme }}, .result = app }}, .values = &.{.{ .name = "default", .type = app }} },
         },
     };
-    const files = try complete(arena, completion);
+    var context: kosm.Frontend.Context = .{ .arena = arena, .path = "lua" };
+    const files = try complete(&context, completion);
     const globals = files[0].contents;
     const expected = [_][]const u8{
         "---@class kosm: kosm.library.kosm\n",

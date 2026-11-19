@@ -33,7 +33,8 @@ const libraries = [_]struct { name: [:0]const u8, open: c.lua_CFunction }{
     .{ .name = "coroutine", .open = c.luaopen_coroutine },
 };
 
-/// A fresh state with the libraries above and the global `kosm` table holding `kosm.null`.
+/// A fresh state with the libraries above and the global `kosm` table holding `kosm.null` and
+/// `kosm.at`.
 /// Call `deinit` when done.
 pub fn init() error{OutOfMemory}!Interpreter {
     const state = c.luaL_newstate() orelse return error.OutOfMemory;
@@ -46,11 +47,15 @@ pub fn init() error{OutOfMemory}!Interpreter {
         c.lua_pushnil(state);
         c.lua_setglobal(state, name);
     }
-    c.lua_createtable(state, 0, 1);
+    c.lua_createtable(state, 0, 2);
     c.lua_pushlightuserdata(state, &null_marker);
     c.lua_setfield(state, -2, "null");
     c.lua_setglobal(state, "kosm");
-    // The chunk is ours and cannot fail but for lack of memory.
+    // The chunks are ours and cannot fail but for lack of memory.
+    if (c.luaL_loadbufferx(state, at_function, at_function.len, "=kosm", "t") != c.LUA_OK) return error.OutOfMemory;
+    _ = c.lua_getglobal(state, "kosm");
+    _ = c.luaL_newmetatable(state, placed_metatable);
+    if (c.lua_pcallk(state, 2, 0, 0, 0, null) != c.LUA_OK) return error.OutOfMemory;
     if (interpreter.run(strict_globals, "=kosm")) |_| return error.OutOfMemory;
     interpreter.pop(1);
     return interpreter;
@@ -84,6 +89,23 @@ pub const Kind = enum { nil, boolean, null_marker, light_userdata, integer, floa
 
 /// The registry name of the metatable every handle to a Zig value has.
 pub const handle_metatable = "kosm.handle";
+
+/// The registry name of the metatable of what `kosm.at` returns.
+pub const placed_metatable = "kosm.placed";
+
+/// Defines `kosm.at(place, value)`, given the `kosm` table and the metatable it marks with.
+const at_function =
+    \\local kosm, placed = ...
+    \\rawset(kosm, "at", function(place, value)
+    \\    if type(place) ~= "string" then
+    \\        error("kosm.at takes the place the value was written, as \"kosmoi/mine.json:3\", then the value", 2)
+    \\    end
+    \\    if value == nil then
+    \\        error("kosm.at(" .. place .. ", nil): a value set to nil is no value; give kosm.null to clear it", 2)
+    \\    end
+    \\    return setmetatable({ place = place, value = value }, placed)
+    \\end)
+;
 
 /// A value's kind, as messages name it.
 pub fn describe(value_kind: Kind) []const u8 {

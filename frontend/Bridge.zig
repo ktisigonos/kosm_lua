@@ -103,6 +103,14 @@ pub fn push(interpreter: Interpreter, context: *Frontend.Context, value: Loose) 
     };
 }
 
+/// Whether the table at `index` is what `kosm.at` returns.
+fn isPlaced(state: *c.lua_State, index: c_int) bool {
+    if (c.lua_getmetatable(state, index) == 0) return false;
+    _ = c.lua_getfield(state, c.LUA_REGISTRYINDEX, Interpreter.placed_metatable);
+    defer c.lua_settop(state, -3);
+    return c.lua_rawequal(state, -1, -2) != 0;
+}
+
 /// Whether the value at `index` is a handle, and if so, which.
 pub fn handleAt(state: *c.lua_State, index: c_int) ?Frontend.Handle {
     const pointer = c.luaL_testudata(state, index, handle_metatable) orelse return null;
@@ -217,9 +225,24 @@ const Session = struct {
             .float => .{ .float = interpreter_value.float(index) },
             .string => .{ .string = try session.context.arena.dupe(u8, interpreter_value.string(index).?) },
             .handle => .{ .handle = handleAt(session.state, index).? },
-            .table => try session.table(index, depth),
+            .table => if (isPlaced(session.state, index)) return session.placed(index, depth) else try session.table(index, depth),
             else => return session.fail("it is {s}; values are strings, numbers, booleans, tables, kosm.null or values from Zig", .{Interpreter.describe(kind)}),
         } };
+    }
+
+    /// The value `kosm.at(place, value)` gave at `index`, its origin the place.
+    fn placed(session: *Session, index: c_int, depth: usize) Raised!Loose {
+        const interpreter_value = session.interpreter();
+        try interpreter_value.reserve(2);
+        const position = interpreter_value.absolute(index);
+        interpreter_value.pushField(position, "place");
+        const place = try session.context.arena.dupe(u8, interpreter_value.string(-1).?);
+        interpreter_value.pop(1);
+        interpreter_value.pushField(position, "value");
+        defer interpreter_value.pop(1);
+        var value = try session.loose(-1, depth + 1);
+        value.origin = place;
+        return value;
     }
 
     fn table(session: *Session, index: c_int, depth: usize) Raised!Loose.Kind {

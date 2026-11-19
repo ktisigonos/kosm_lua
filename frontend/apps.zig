@@ -88,14 +88,16 @@ pub fn declare(context: *Context, source: []const u8) Error!Declaration {
 /// process ending closes it.
 var shared: ?Interpreter = null;
 
-/// What the script at `path` returns, for messages: an adapter's in `adapters/`, else an app's.
+/// What the script at `path` returns, for messages: an adapter's in `adapters/`, a frontend's in
+/// `frontends/`, else an app's.
 fn shapeOf(path: []const u8) []const u8 {
     if (std.mem.startsWith(u8, path, "adapters/")) return "an adapter's script returns a table with name, extensions and the capabilities it gives";
+    if (std.mem.startsWith(u8, path, "frontends/")) return "a frontend's script returns a table with name, extensions and load, and maybe variants and complete";
     return "an app's script returns a table with App, from, apply and maybe reload";
 }
 
-/// Calls `function` of the app or adapter script at `context.path`, running the script on its
-/// first call.
+/// Calls `function` of the app, adapter or frontend script at `context.path`, running the script
+/// on its first call.
 pub fn call(context: *Context, source: []const u8, function: []const u8, arguments: []const Loose) Error!Loose {
     const interpreter = shared orelse started: {
         const started = try Interpreter.init();
