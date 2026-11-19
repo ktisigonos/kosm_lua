@@ -152,6 +152,19 @@ const base_library =
     \\---Clears an optional field: `waybar = { spacing = kosm.null }`.
     \\---@class kosm.null
     \\
+    \\---The type of a field of an app written in Lua. Call a boolean, integer, float or text one
+    \\---with the field's default: `bars = kosm.integer(0)`.
+    \\---@class kosm.type
+    \\---@overload fun(default: boolean|number|string): kosm.type
+    \\
+    \\---An app written in Lua, as its script returns it. Write `---@type kosm.app` above its
+    \\---`return`, and `---@param self <name>.App` above `apply` to complete its fields.
+    \\---@class kosm.app
+    \\---@field App? table<string, kosm.type|table> The app's fields by name, each with its type: `bars = kosm.integer(0)`, `foreground = kosm.optional(kosm.Color)`. A `---` comment above a field documents it.
+    \\---@field from? fun(theme: kosm.Theme): table The app built from the theme: a table of the fields it sets. Without it the app starts from its defaults.
+    \\---@field apply fun(self: any, output: kosm.Output) Writes the app's files through `output`.
+    \\---@field reload? fun(self: any, reloader: kosm.Reloader) Tells the program to read its files again.
+    \\
     \\
 ;
 
@@ -168,6 +181,12 @@ fn writeGlobals(writer: *std.Io.Writer, completion: Completion) std.Io.Writer.Er
         \\---What kosm gives a kosmos.
         \\---@class kosm{s}{s}
         \\---@field null kosm.null Clears an optional field, so the program's own default applies.
+        \\---@field boolean kosm.type An app's field holding true or false: `kosm.boolean(true)`.
+        \\---@field integer kosm.type An app's field holding a whole number: `kosm.integer(0)`.
+        \\---@field float kosm.type An app's field holding a number: `kosm.float(1.5)`.
+        \\---@field text kosm.type An app's field holding a string: `kosm.text("bars")`.
+        \\---@field optional fun(child: kosm.type|table): kosm.type An app's field that may be null, its default: `kosm.optional(kosm.Color)`.
+        \\---@field list fun(item: kosm.type|table): kosm.type An app's field holding a list, empty by default: `kosm.list(kosm.Color)`.
         \\kosm = {{}}
         \\
         \\

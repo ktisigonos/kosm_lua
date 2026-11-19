@@ -6,6 +6,7 @@ const Interpreter = @import("Interpreter.zig");
 const Bridge = @import("Bridge.zig");
 const Lines = @import("Lines.zig");
 const completion = @import("completion.zig");
+const apps = @import("apps.zig");
 
 /// Reads `kosmoi/<name>.lua`. The script runs in Lua 5.5 without the io, os, package and debug
 /// libraries, with every Zig kosmos under `kosmoi`, kosm's own types under `kosm` and every
@@ -23,6 +24,8 @@ pub const frontend: kosm.Frontend = .{
     .variants = variants,
     .complete = completion.complete,
     .editor_file = completion.editor_file,
+    .declare = apps.declare,
+    .call = apps.call,
 };
 
 /// How deep tables may nest; deeper is taken for a table holding itself.

@@ -63,6 +63,46 @@ pub fn install(interpreter: Interpreter, context: *Frontend.Context) Frontend.Er
     }
 }
 
+/// Makes `context` the one the state's callbacks use until `leave`, and returns the one before
+/// it, so a call into Zig that runs another script's function on the same state gets its own.
+pub fn enter(interpreter: Interpreter, context: *Frontend.Context) ?*Frontend.Context {
+    const state = interpreter.state;
+    _ = c.lua_rawgetp(state, c.LUA_REGISTRYINDEX, &context_key);
+    const previous: ?*Frontend.Context = @ptrCast(@alignCast(c.lua_touserdata(state, -1)));
+    c.lua_settop(state, -2);
+    c.lua_pushlightuserdata(state, context);
+    c.lua_rawsetp(state, c.LUA_REGISTRYINDEX, &context_key);
+    return previous;
+}
+
+/// Gives the state back the context `enter` returned.
+pub fn leave(interpreter: Interpreter, previous: ?*Frontend.Context) void {
+    if (previous) |context| {
+        c.lua_pushlightuserdata(interpreter.state, context);
+    } else c.lua_pushnil(interpreter.state);
+    c.lua_rawsetp(interpreter.state, c.LUA_REGISTRYINDEX, &context_key);
+}
+
+/// The value at `index` as a loose value, as a call into Zig reads its arguments; a failure is
+/// recorded through `context.fail`.
+pub fn read(interpreter: Interpreter, context: *Frontend.Context, index: c_int) Frontend.Error!Loose {
+    var session: Session = .{ .state = interpreter.state, .context = context };
+    return session.loose(index, 0) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.Raised => context.fail("{s}", .{session.message}),
+    };
+}
+
+/// Pushes `value`, as a call into Zig gives back its result: tables are refused, since only
+/// scripts give them.
+pub fn push(interpreter: Interpreter, context: *Frontend.Context, value: Loose) Frontend.Error!void {
+    var session: Session = .{ .state = interpreter.state, .context = context };
+    return session.push(value) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.Raised => context.fail("{s}", .{session.message}),
+    };
+}
+
 /// Whether the value at `index` is a handle, and if so, which.
 pub fn handleAt(state: *c.lua_State, index: c_int) ?Frontend.Handle {
     const pointer = c.luaL_testudata(state, index, handle_metatable) orelse return null;
@@ -213,6 +253,8 @@ const Session = struct {
             interpreter_value.pop(1);
         }
         if (entries.items.len != 0 and numbered != 0) return session.fail("it mixes named fields with list items", .{});
+        // Lua keeps no order of a table's fields, so they come sorted by name, the same every run.
+        std.mem.sort(Loose.Entry, entries.items, {}, entryLessThan);
         if (numbered != 0) {
             if (largest != numbered) return session.fail("its list items have gaps; a list's keys run 1..n", .{});
             const items = try session.context.arena.alloc(Loose, numbered);
@@ -244,6 +286,10 @@ const Session = struct {
         }
     }
 };
+
+fn entryLessThan(_: void, left: Loose.Entry, right: Loose.Entry) bool {
+    return std.mem.order(u8, left.key, right.key) == .lt;
+}
 
 fn pushHandle(state: *c.lua_State, handle: Frontend.Handle) void {
     const memory = c.lua_newuserdatauv(state, @sizeOf(Frontend.Handle), 0);

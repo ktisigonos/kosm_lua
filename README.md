@@ -151,5 +151,49 @@ return { base = "personal", overrides = { ... } }
 building on another script names the Zig kosmos at the bottom. `kosm.script` builds on none.
 Types keep their Zig names: `kosm_kitty.App`, `kosm.Theme.Input`.
 
+## Apps in Lua
+
+An app is `apps/<name>.lua`, or `apps/<name>/root.lua` in a folder without a `root.zig`. It
+returns its fields and functions, like a Zig app:
+
+```lua
+---@type kosm.app
+return {
+    --- Cava, the console audio visualizer.
+    App = {
+        --- How many bars; 0 fits as many as the terminal holds.
+        bars = kosm.integer(0),
+        --- The bars' color; null leaves cava's.
+        foreground = kosm.optional(kosm.Color),
+        --- The bars' colors from bottom to top; empty for none.
+        gradient = kosm.list(kosm.Color),
+    },
+    from = function(theme)
+        return { foreground = theme.roles.accent }
+    end,
+    ---@param self cava.App
+    apply = function(self, output)
+        output:generateValue({ file = "~/.config/cava/config", lang = "ini" }, {
+            general = { bars = self.bars },
+            color = { foreground = self.foreground },
+        })
+    end,
+}
+```
+
+A field's type is `kosm.boolean`, `kosm.integer`, `kosm.float` or `kosm.text` called with its
+default, `kosm.optional(type)` (null by default), `kosm.list(type)` (empty by default), or any
+Zig type by name (`kosm.Color`, `kosm_cursor.App`). The `---` comment above a field documents it.
+`from(theme)` returns a table of the fields it sets, `apply(self, output)` writes files through the
+same `kosm.Output` methods a Zig app calls (`generateValue`, `blockValue`, `templateValue` and
+`templateBlockValue` take a table), and `reload(self, reloader)` is optional.
+
+Kosm reads the declaration when it builds, without running any function, and generates the app's
+Zig module, so Zig and Lua kosmoi use it alike (`@import("cava")`, `overrides = { cava = ... }`)
+and both ZLS and LuaLS complete its fields. Editing a function body compiles nothing; changing the
+fields rebuilds once. While kosm reads the declaration no Zig code runs, so a call outside the
+functions fails naming its line. Every app's script runs in one Lua state, each with globals of its
+own. A Lua table has no order, so the tables an app writes come sorted by key.
+
 The frontend is a module of its own, `kosm_lua_frontend`: packages using only the adapter
 (`kosm_hyprland`, `kosm_nvim`) never fetch or build Lua.
