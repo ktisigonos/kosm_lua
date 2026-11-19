@@ -386,6 +386,11 @@ fn readHandle(session: *Session) Raised!c_int {
             }
         }
     }
+    // One past a list's end is nil, as for a Lua sequence, so `ipairs` stops there.
+    if (key == .item and handle.type.list and key.item == handle.type.length(handle.pointer)) {
+        c.lua_pushnil(session.state);
+        return 1;
+    }
     var frontend_call = session.context.library.call(session.context.arena);
     const value = handle.type.get(&frontend_call, handle.pointer, key) catch |err| return session.callFailed(err, &frontend_call);
     try session.push(value);

@@ -492,9 +492,37 @@ test "a script cannot reach files, the environment or native code" {
 }
 
 /// A library for tests: `demo.box(size)` gives a handle to a `Box`, whose `grow(by)` method
-/// changes it, and `demo.boxes.small` is a value.
+/// changes it, `demo.boxes.small` is a value, and `demo.sizes()` a list of 1, 2 and 3.
 const test_library = struct {
     const Box = struct { size: i64 };
+    const Sizes = [3]i64;
+
+    const sizes_type: kosm.Frontend.Handle.Type = .{
+        .id = kosm.Frontend.Handle.id(Sizes),
+        .name = "demo.Sizes",
+        .list = true,
+        .get = sizeAt,
+        .set = set,
+        .length = sizesLength,
+    };
+
+    fn sizes(call: *kosm.Frontend.Call, arguments: []const kosm.Loose) kosm.Frontend.Call.Error!kosm.Loose {
+        _ = arguments;
+        const list = try call.arena.create(Sizes);
+        list.* = .{ 1, 2, 3 };
+        return .{ .value = .{ .handle = .{ .pointer = list, .type = &sizes_type } } };
+    }
+
+    fn sizeAt(call: *kosm.Frontend.Call, pointer: *anyopaque, key: kosm.Frontend.Handle.Key) kosm.Frontend.Call.Error!kosm.Loose {
+        const list: *Sizes = @ptrCast(@alignCast(pointer));
+        if (key.item >= list.len) return call.fail("item {d} is past the end of a list of {d}", .{ key.item + 1, list.len });
+        return .{ .value = .{ .integer = list[key.item] } };
+    }
+
+    fn sizesLength(pointer: *anyopaque) usize {
+        _ = pointer;
+        return 3;
+    }
 
     const box_type: kosm.Frontend.Handle.Type = .{
         .id = kosm.Frontend.Handle.id(Box),
@@ -549,6 +577,7 @@ const test_library = struct {
     const boxes: kosm.Frontend.Namespace = .{ .name = "demo.boxes", .entries = &.{.{ .name = "small", .kind = .{ .constant = .{ .name = "small", .call = small } } }} };
     const demo: kosm.Frontend.Namespace = .{ .name = "demo", .entries = &.{
         .{ .name = "box", .kind = .{ .function = .{ .name = "box", .call = make } } },
+        .{ .name = "sizes", .kind = .{ .function = .{ .name = "sizes", .call = sizes } } },
         .{ .name = "boxes", .kind = .{ .namespace = &boxes } },
     } };
     const library: kosm.Frontend.Library = .{ .globals = &.{&demo} };
@@ -571,6 +600,21 @@ test "a script calls Zig functions and returns the value it built, changed throu
     try testing.expectEqual(6, script.tree.?.as(test_library.Box).?.size);
 }
 
+test "ipairs walks a Zig list, which reads as nil one past its end and fails further out" {
+    var fixture: Fixture = undefined;
+    fixture.init();
+    defer fixture.deinit();
+    fixture.context.library = test_library.library;
+    const script = try fixture.load(
+        \\local total = 0
+        \\for _, size in ipairs(demo.sizes()) do total = total + size end
+        \\assert(#demo.sizes() == 3 and demo.sizes()[4] == nil)
+        \\return demo.box(total)
+    );
+    try testing.expectEqual(6, script.tree.?.as(test_library.Box).?.size);
+    try fixture.expectFailure("return demo.sizes()[5]", "kosmoi/mine.lua:1: item 5 is past the end of a list of 3");
+}
+
 test "a failing call, field or namespace raises a Lua error naming the line" {
     var fixture: Fixture = undefined;
     fixture.init();
@@ -582,7 +626,7 @@ test "a failing call, field or namespace raises a Lua error naming the line" {
     try fixture.expectFailure("return demo.box('x')", "kosmoi/mine.lua:1: demo.box takes an integer");
     try fixture.expectFailure("return demo.box(1).sise", "kosmoi/mine.lua:1: demo.Box has no field 'sise'");
     try fixture.expectFailure("return demo.box(function() end)", "kosmoi/mine.lua:1: argument 1: it is a function; values are strings, numbers, booleans, tables, kosm.null or values from Zig");
-    try fixture.expectFailure("return demo()", "kosmoi/mine.lua:1: demo is not a function; it holds box, boxes");
+    try fixture.expectFailure("return demo()", "kosmoi/mine.lua:1: demo is not a function; it holds box, sizes, boxes");
 }
 
 test "a handle inside a returned table is a loose handle" {

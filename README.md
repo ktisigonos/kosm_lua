@@ -186,7 +186,10 @@ default, `kosm.optional(type)` (null by default), `kosm.list(type)` (empty by de
 Zig type by name (`kosm.Color`, `kosm_cursor.App`). The `---` comment above a field documents it.
 `from(theme)` returns a table of the fields it sets, `apply(self, output)` writes files through the
 same `kosm.Output` methods a Zig app calls (`generateValue`, `blockValue`, `templateValue` and
-`templateBlockValue` take a table), and `reload(self, reloader)` is optional.
+`templateBlockValue` take a table), and `reload(self, reloader)` is optional. `output:edit({ files =
+"~/.config/cava/config" })` picks files to change in place, and the selection's `setValue(path,
+value)` (with `setFirstValue`, `setAllValue`, `setNthValue` and the rest), `nodesAt(path)`,
+`replaceValue`, `insertValue` and `appendValue` take the path as text, as `"general.bars"`.
 
 Kosm reads the declaration when it builds, without running any function, and generates the app's
 Zig module, so Zig and Lua kosmoi use it alike (`@import("cava")`, `overrides = { cava = ... }`)
