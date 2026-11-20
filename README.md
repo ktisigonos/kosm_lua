@@ -45,6 +45,9 @@ or by `elements` yet.
 
 ## Kosmoi in Lua
 
+`kosm new kosmos|app|adapter|frontend <name> --language lua` starts one, a commented file showing
+each part.
+
 A file `kosmoi/<name>.lua` in the config is a kosmos, applied like any other
 (`kosm apply mine`); so is `kosmoi/<name>/root.lua`, whose folder may also hold Lua variants
 (`kosmoi/<name>/nord.lua`) and Zig ones in a `root.zig` that declares no `kosmos`. It returns a

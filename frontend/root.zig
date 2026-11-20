@@ -31,6 +31,12 @@ pub const frontend: kosm.Frontend = .{
     .declare_frontend = frontends.declare,
     .call = apps.call,
     .counts_from = 1,
+    .scaffolds = .{
+        .kosmos = @embedFile("scaffolds/kosmos.lua"),
+        .app = @embedFile("scaffolds/app.lua"),
+        .adapter = @embedFile("scaffolds/adapter.lua"),
+        .frontend = @embedFile("scaffolds/frontend.lua"),
+    },
 };
 
 /// How deep tables may nest; deeper is taken for a table holding itself.
@@ -687,4 +693,44 @@ test "variants are listed without calling any, groups by their own kosmos" {
     try testing.expectEqualStrings("empty.hard", names[2]);
     try testing.expectEqualStrings("light", names[3]);
     try testing.expectEqual(0, (try variants(&fixture.context, "return { base = 'personal' }")).len);
+}
+
+/// Scaffold `kind` with `name` in place of the placeholder, as `kosm new` writes it.
+fn testScaffold(arena: std.mem.Allocator, scaffold: ?[]const u8, name: []const u8) ![]const u8 {
+    return std.mem.replaceOwned(u8, arena, scaffold.?, kosm.Frontend.Scaffolds.name_placeholder, name);
+}
+
+test "every scaffold reads with its name in place: the kosmos and its variant, the app, the adapter and the frontend" {
+    var fixture: Fixture = undefined;
+    fixture.init();
+    defer fixture.deinit();
+    const arena = fixture.arena.allocator();
+    const scaffolds = frontend.scaffolds;
+
+    const kosmos = try testScaffold(arena, scaffolds.kosmos, "mine");
+    const names = try variants(&fixture.context, kosmos);
+    try testing.expectEqual(1, names.len);
+    try testing.expectEqualStrings("light", names[0]);
+    const dark = try fixture.load(kosmos);
+    try testing.expectEqualStrings("dark", (try entryOf(dark.theme.?, "mode")).value.string);
+    try testing.expect(std.mem.find(u8, kosmos, "`kosm apply mine.light`") != null);
+    fixture.context.variant = &.{"light"};
+    try testing.expectEqualStrings("light", (try entryOf((try fixture.load(kosmos)).theme.?, "mode")).value.string);
+
+    var app_context: kosm.Frontend.Context = .{ .arena = arena, .path = "apps/my_bar.lua" };
+    const app = try apps.declare(&app_context, try testScaffold(arena, scaffolds.app, "my_bar"));
+    try testing.expectEqual(4, app.fields.len);
+    try testing.expectEqualStrings("~/.config/my_bar/colors.conf", app.fields[0].default.?.value.string);
+    try testing.expectEqualStrings("from", app.functions[0]);
+    try testing.expectEqualStrings("apply", app.functions[1]);
+
+    var adapter_context: kosm.Frontend.Context = .{ .arena = arena, .path = "adapters/my_lang.lua" };
+    const adapter = try adapters.declare(&adapter_context, try testScaffold(arena, scaffolds.adapter, "my_lang"));
+    try testing.expectEqualStrings("my_lang", adapter.name);
+    try testing.expectEqualStrings(".my_lang", adapter.extensions[0]);
+
+    var frontend_context: kosm.Frontend.Context = .{ .arena = arena, .path = "frontends/keys.lua" };
+    const declared = try frontends.declare(&frontend_context, try testScaffold(arena, scaffolds.frontend, "keys"));
+    try testing.expectEqualStrings("keys", declared.name);
+    try testing.expectEqualStrings(".keys", declared.extensions[0]);
 }
