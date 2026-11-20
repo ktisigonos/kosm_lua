@@ -3,12 +3,8 @@
 -- `const scaffold_name = @import("scaffold_name");` and a field `scaffold_name: scaffold_name.App`
 -- set to `scaffold_name.from(theme)`.
 
--- `kosm.<field>` is replaced by that field of the app.
-local template = [[
-foreground = kosm.foreground
-background = kosm.background
-accent = kosm.accent
-]]
+-- The colors the file holds, in its order.
+local colors = { "foreground", "background", "accent" }
 
 ---@type kosm.app
 return {
@@ -17,12 +13,12 @@ return {
     App = {
         --- The file kosm writes. Default: `~/.config/scaffold_name/colors.conf`.
         file = kosm.text("~/.config/scaffold_name/colors.conf"),
-        --- Text. Default: white, black in light mode.
-        foreground = kosm.Color,
-        --- Background. Default: black, white in light mode.
-        background = kosm.Color,
-        --- The accent. Default: cyan.
-        accent = kosm.Color,
+        --- Text; null leaves the program's own. Default: white, black in light mode.
+        foreground = kosm.optional(kosm.Color),
+        --- Background; null leaves the program's own. Default: black, white in light mode.
+        background = kosm.optional(kosm.Color),
+        --- The accent; null leaves the program's own. Default: cyan.
+        accent = kosm.optional(kosm.Color),
     },
     -- The app's defaults, derived from the theme.
     from = function(theme)
@@ -37,11 +33,15 @@ return {
     -- writes everything at the end, all or nothing.
     ---@param self scaffold_name.App
     apply = function(self, output)
-        output:templateValue({ file = self.file, text = template }, {
-            foreground = self.foreground,
-            background = self.background,
-            accent = self.accent,
-        })
+        -- A line `<name> = kosm.<name>` for each color set; `kosm.<name>` is replaced by `values.<name>`.
+        local lines, values = {}, {}
+        for _, name in ipairs(colors) do
+            if self[name] then
+                lines[#lines + 1] = name .. " = kosm." .. name .. "\n"
+                values[name] = self[name]
+            end
+        end
+        output:templateValue({ file = self.file, text = table.concat(lines) }, values)
     end,
     -- To reload the program after an apply, add:
     -- reload = function(self, reloader)
