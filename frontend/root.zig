@@ -29,6 +29,7 @@ pub const frontend: kosm.Frontend = .{
     .declare = apps.declare,
     .declare_adapter = adapters.declare,
     .declare_frontend = frontends.declare,
+    .declares = apps.declares,
     .call = apps.call,
     .counts_from = 1,
     .scaffolds = .{

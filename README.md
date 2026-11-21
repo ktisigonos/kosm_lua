@@ -270,3 +270,15 @@ language need one written in Zig.
 
 The frontend is a module of its own, `kosm_lua_frontend`: packages using only the adapter
 (`kosm_hyprland`, `kosm_nvim`) never fetch or build Lua.
+
+## Packages in Lua
+
+A package of its own repository may be written in Lua: `root.lua` in place of `root.zig`,
+beside the one-line `build.zig` and a `build.zig.zon` depending on `kosm` and `kosm_lua`.
+`kosm new package my_bar --language lua` writes all three into `./my_bar/`, `root.lua` holding
+an app. The script returns an app's table (it holds `App`), an adapter's (`name` and
+`extensions`) or a frontend's (`load`), and the package's build generates its Zig module from
+it, so Zig kosmoi and packages import it like any package. Add Zig packages whose types its
+fields name (`cursor = kosm_cursor.App`) to its `build.zig.zon`. A config wearing it lists it
+itself, even when it comes through another package, since kosm finds the script through the
+package's folder (`~~my_bar/root.lua`), which errors name.

@@ -83,6 +83,31 @@ pub fn declare(context: *Context, source: []const u8) Error!Declaration {
     return reader.declaration();
 }
 
+/// Says whether the script `source` gives an app (its table holds `App`), a frontend (`load`)
+/// or an adapter (`name` or `extensions`, with neither), without calling any of its functions.
+pub fn declares(context: *Context, source: []const u8) Error!kosm.Frontend.Declared {
+    const interpreter = try Interpreter.init();
+    defer interpreter.deinit();
+    try installPrelude(interpreter, context, true);
+    if (interpreter.run(source, try chunkName(context))) |message| return context.fail("{s}", .{message});
+    if (interpreter.kind(-1) != .table) return context.fail("{s} returns {s}; a package's root script returns the table of an app, an adapter or a frontend", .{ context.path, Interpreter.describe(interpreter.kind(-1)) });
+    try interpreter.reserve(2);
+    const app = holds(interpreter, "App");
+    const frontend = holds(interpreter, "load");
+    if (app and frontend) return context.fail("{s} returns a table holding both App and load; an app's holds App, a frontend's load, so it is one of them", .{context.path});
+    if (app) return .app;
+    if (frontend) return .frontend;
+    if (holds(interpreter, "name") or holds(interpreter, "extensions")) return .adapter;
+    return context.fail("{s} returns a table holding none of App, load, name or extensions: an app's holds App, an adapter's name and extensions, a frontend's load", .{context.path});
+}
+
+/// Whether the table on top of the stack sets `key`.
+fn holds(interpreter: Interpreter, key: [:0]const u8) bool {
+    interpreter.pushField(-1, key);
+    defer interpreter.pop(1);
+    return interpreter.kind(-1) != .nil;
+}
+
 /// The one interpreter every app's script runs in, started on the first call. A global, because
 /// an app's `from(theme)` takes nothing to hand it in; kosm runs one kosmos per process, and the
 /// process ending closes it.
@@ -394,6 +419,20 @@ test "an app's fields come in the order written, with their types, defaults and 
     try testing.expectEqualStrings("kosm_cursor.App", fields[4].type.zig);
     try testing.expectEqual(.boolean, fields[5].type.optional.*);
     try testing.expectEqual(true, fields[5].default.?.value.boolean);
+}
+
+test "a package's root script says whether it gives an app, an adapter or a frontend" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    var context: Context = .{ .arena = arena_state.allocator(), .path = "~~kosm_scratch/root.lua" };
+    try std.testing.expectEqual(.app, try declares(&context, "return { App = { size = kosm.integer(1) }, apply = function() end }"));
+    try std.testing.expectEqual(.adapter, try declares(&context, "return { name = 'keys', extensions = { '.keys' } }"));
+    try std.testing.expectEqual(.frontend, try declares(&context, "return { name = 'ini', extensions = { '.ini' }, load = function() end }"));
+    try std.testing.expectError(error.InvalidScript, declares(&context, "return { App = {}, load = function() end }"));
+    try std.testing.expectStringEndsWith(context.message.?, "so it is one of them");
+    try std.testing.expectError(error.InvalidScript, declares(&context, "return { apply = function() end }"));
+    try std.testing.expectStringStartsWith(context.message.?, "~~kosm_scratch/root.lua returns a table holding none");
+    try std.testing.expectError(error.InvalidScript, declares(&context, "return 3"));
 }
 
 test "a declaration kosm cannot read fails naming the script's line" {
