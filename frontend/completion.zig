@@ -166,6 +166,24 @@ const base_library =
     \\---@field apply fun(self: any, output: kosm.Output) Writes the app's files through `output`.
     \\---@field reload? fun(self: any, reloader: kosm.Reloader) Tells the program to read its files again.
     \\
+    \\---A modifier written in Lua, in `colors/`. Write `---@type kosm.modifier` above its `return`,
+    \\---and `---@param self <name>.Modifier` above `apply` to complete its fields.
+    \\---@class kosm.modifier
+    \\---@field Modifier table<string, kosm.type|table> The modifier's fields by name, each with its type: `amount = kosm.float(0.5)`.
+    \\---@field apply fun(self: any, color: kosm.Color): kosm.Color The color changed.
+    \\
+    \\---A palette style written in Lua, in `colors/`. Write `---@type kosm.style` above its
+    \\---`return`, and `---@param self <name>.Style` above `apply` to complete its fields.
+    \\---@class kosm.style
+    \\---@field Style table<string, kosm.type|table> The style's fields by name, each with its type: `chroma = kosm.float(0.6)`.
+    \\---@field apply fun(self: any, hue: kosm.Color, background: kosm.Color): kosm.Color The final color of a hue taken from an image; `kosm.Image.readable` keeps it readable on the background.
+    \\
+    \\---A variation family written in Lua, in `colors/`. Write `---@type kosm.family` above its
+    \\---`return`.
+    \\---@class kosm.family
+    \\---@field Family table<string, kosm.type|table> The family's modifiers by name: `soft = kosm.Modifier`.
+    \\---@field from fun(mode: "dark"|"light"): table The family's modifiers for a mode: a table of the fields it sets.
+    \\
     \\
 ;
 

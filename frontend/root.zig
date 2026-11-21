@@ -40,6 +40,9 @@ pub const frontend: kosm.Frontend = .{
         .app = @embedFile("scaffolds/app.lua"),
         .adapter = @embedFile("scaffolds/adapter.lua"),
         .frontend = @embedFile("scaffolds/frontend.lua"),
+        .modifier = @embedFile("scaffolds/modifier.lua"),
+        .style = @embedFile("scaffolds/style.lua"),
+        .family = @embedFile("scaffolds/family.lua"),
     },
 };
 
@@ -704,7 +707,7 @@ fn testScaffold(arena: std.mem.Allocator, scaffold: ?[]const u8, name: []const u
     return std.mem.replaceOwned(u8, arena, scaffold.?, kosm.Frontend.Scaffolds.name_placeholder, name);
 }
 
-test "every scaffold reads with its name in place: the kosmos and its variant, the app, the adapter and the frontend" {
+test "every scaffold reads with its name in place: the kosmos and its variant, the app, the adapter, the frontend and the color scripts" {
     var fixture: Fixture = undefined;
     fixture.init();
     defer fixture.deinit();
@@ -737,4 +740,16 @@ test "every scaffold reads with its name in place: the kosmos and its variant, t
     const declared = try frontends.declare(&frontend_context, try testScaffold(arena, scaffolds.frontend, "keys"));
     try testing.expectEqualStrings("keys", declared.name);
     try testing.expectEqualStrings(".keys", declared.extensions[0]);
+
+    var color_context: kosm.Frontend.Context = .{ .arena = arena, .path = "colors/warm.lua" };
+    const modifier = try apps.declareModifier(&color_context, try testScaffold(arena, scaffolds.modifier, "warm"));
+    try testing.expectEqualStrings("amount", modifier.fields[0].name);
+    try testing.expectEqualStrings("apply", modifier.functions[0]);
+    color_context.path = "colors/soft.lua";
+    const style = try apps.declareStyle(&color_context, try testScaffold(arena, scaffolds.style, "soft"));
+    try testing.expectEqual(2, style.fields.len);
+    color_context.path = "colors/glow.lua";
+    const family = try apps.declareFamily(&color_context, try testScaffold(arena, scaffolds.family, "glow"));
+    try testing.expectEqualStrings("kosm.Modifier", family.fields[1].type.zig);
+    try testing.expectEqualStrings("from", family.functions[0]);
 }
