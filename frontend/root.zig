@@ -29,6 +29,7 @@ pub const frontend: kosm.Frontend = .{
     .declare = apps.declare,
     .declare_modifier = apps.declareModifier,
     .declare_style = apps.declareStyle,
+    .declare_family = apps.declareFamily,
     .declare_adapter = adapters.declare,
     .declare_frontend = frontends.declare,
     .declares = apps.declares,

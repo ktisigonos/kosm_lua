@@ -251,6 +251,30 @@ return {
 kosmos' `Params` (`kosmoi.wallpaper({ style = pastel.style({ wash = 0.6 }) })`). Black and white
 move apart as for every built-in style but `literal`.
 
+## Variation families in Lua
+
+A family of variations of your own, like the theme's `state` or `surface`, is a script in
+`colors/` declaring its modifiers under `Family` and giving `from(mode)`, which returns the ones it
+sets for `"dark"` or `"light"`:
+
+```lua
+return {
+    --- Glows for highlighted elements, away from the background.
+    Family = {
+        --- A soft glow.
+        soft = kosm.Modifier,
+    },
+    from = function(mode)
+        local away = mode == "dark" and 1 or -1
+        return { soft = { lightness = 0.15 * away } }
+    end,
+}
+```
+
+`glow.from("dark")` gives the family (Zig: `glow.from(.dark)`), whose modifiers are set and
+read like the theme's (`family.soft:apply(color)`). The theme cannot hold a family of your own,
+so your base holds it beside the theme, and your apps read it from there.
+
 ## Adapters in Lua
 
 An adapter is `adapters/<name>.lua`, or `adapters/<name>/root.lua`. It returns its data and the

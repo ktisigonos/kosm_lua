@@ -1,10 +1,11 @@
-//! Apps, modifiers and palette styles written in Lua: what a script declares, read while kosm
-//! builds the config, and its functions, run in the one interpreter every script shares. An
-//! app's script returns
-//! `{ App = { field = kosm.integer(0), ... }, from = function(theme) ... end,
-//! apply = function(self, output) ... end, reload = function(self, reloader) ... end }`, a
-//! modifier's `{ Modifier = { amount = kosm.float(1), ... }, apply = function(self, color) ... end }`,
-//! a palette style's `{ Style = { ... }, apply = function(self, hue, background) ... end }`.
+//! Apps, modifiers, palette styles and variation families written in Lua: what a script
+//! declares, read while kosm builds the config, and its functions, run in the one interpreter
+//! every script shares. An app's script returns `{ App = { field = kosm.integer(0), ... },
+//! from = function(theme) ... end, apply = function(self, output) ... end,
+//! reload = function(self, reloader) ... end }`; a modifier's `{ Modifier = { ... },
+//! apply = function(self, color) ... end }`; a palette style's `{ Style = { ... },
+//! apply = function(self, hue, background) ... end }`; a family's
+//! `{ Family = { soft = kosm.Modifier, ... }, from = function(mode) ... end }`.
 
 const std = @import("std");
 const kosm = @import("kosm");
@@ -44,6 +45,7 @@ const Shape = struct {
 const app_shape: Shape = .{ .fields = "App", .functions = &.{ "from", "apply", "reload" }, .holds = "App, from, apply and maybe reload", .whose = "an app's" };
 const modifier_shape: Shape = .{ .fields = "Modifier", .functions = &.{"apply"}, .holds = "Modifier and apply", .whose = "a modifier's" };
 const style_shape: Shape = .{ .fields = "Style", .functions = &.{"apply"}, .holds = "Style and apply", .whose = "a palette style's" };
+const family_shape: Shape = .{ .fields = "Family", .functions = &.{"from"}, .holds = "Family and from", .whose = "a variation family's" };
 /// The most functions any shape gives.
 const max_functions = 3;
 
@@ -106,6 +108,12 @@ pub fn declareStyle(context: *Context, source: []const u8) Error!Declaration {
     return declareShaped(context, source, style_shape);
 }
 
+/// Reads what the variation family script `source` declares, without calling any of its
+/// functions.
+pub fn declareFamily(context: *Context, source: []const u8) Error!Declaration {
+    return declareShaped(context, source, family_shape);
+}
+
 fn declareShaped(context: *Context, source: []const u8, shape: Shape) Error!Declaration {
     const interpreter = try Interpreter.init();
     defer interpreter.deinit();
@@ -117,26 +125,27 @@ fn declareShaped(context: *Context, source: []const u8, shape: Shape) Error!Decl
 }
 
 /// Says whether the script `source` gives an app (its table holds `App`), a modifier
-/// (`Modifier`), a palette style (`Style`), a frontend (`load`) or an adapter (`name` or
-/// `extensions`, with none of them), without calling any of its functions.
+/// (`Modifier`), a palette style (`Style`), a variation family (`Family`), a frontend (`load`)
+/// or an adapter (`name` or `extensions`, with none of them), without calling any of its
+/// functions.
 pub fn declares(context: *Context, source: []const u8) Error!kosm.Frontend.Declared {
     const interpreter = try Interpreter.init();
     defer interpreter.deinit();
     try installPrelude(interpreter, context, true);
     if (interpreter.run(source, try chunkName(context))) |message| return context.fail("{s}", .{message});
-    if (interpreter.kind(-1) != .table) return context.fail("{s} returns {s}; the script returns the table of an app, a modifier, a palette style, an adapter or a frontend", .{ context.path, Interpreter.describe(interpreter.kind(-1)) });
+    if (interpreter.kind(-1) != .table) return context.fail("{s} returns {s}; the script returns the table of an app, a modifier, a palette style, a variation family, an adapter or a frontend", .{ context.path, Interpreter.describe(interpreter.kind(-1)) });
     try interpreter.reserve(2);
-    const keys = [_][:0]const u8{ "App", "Modifier", "Style", "load" };
-    const kinds = [_]kosm.Frontend.Declared{ .app, .modifier, .style, .frontend };
+    const keys = [_][:0]const u8{ "App", "Modifier", "Style", "Family", "load" };
+    const kinds = [_]kosm.Frontend.Declared{ .app, .modifier, .style, .family, .frontend };
     var found: ?usize = null;
     for (keys, 0..) |key, position| {
         if (!holds(interpreter, key)) continue;
-        if (found) |first| return context.fail("{s} returns a table holding both {s} and {s}; an app's holds App, a modifier's Modifier, a palette style's Style, a frontend's load, so it is one of them", .{ context.path, keys[first], key });
+        if (found) |first| return context.fail("{s} returns a table holding both {s} and {s}; an app's holds App, a modifier's Modifier, a palette style's Style, a family's Family, a frontend's load, so it is one of them", .{ context.path, keys[first], key });
         found = position;
     }
     if (found) |position| return kinds[position];
     if (holds(interpreter, "name") or holds(interpreter, "extensions")) return .adapter;
-    return context.fail("{s} returns a table holding none of App, Modifier, Style, load, name or extensions: an app's holds App, a modifier's Modifier, a palette style's Style, an adapter's name and extensions, a frontend's load", .{context.path});
+    return context.fail("{s} returns a table holding none of App, Modifier, Style, Family, load, name or extensions: an app's holds App, a modifier's Modifier, a palette style's Style, a family's Family, an adapter's name and extensions, a frontend's load", .{context.path});
 }
 
 /// Whether the table on top of the stack sets `key`.
@@ -152,9 +161,9 @@ fn holds(interpreter: Interpreter, key: [:0]const u8) bool {
 var shared: ?Interpreter = null;
 
 /// What the script at `path` returns, for messages: an adapter's in `adapters/`, a frontend's in
-/// `frontends/`, a modifier's or palette style's in `colors/`, else an app's.
+/// `frontends/`, a modifier's, palette style's or family's in `colors/`, else an app's.
 fn shapeOf(path: []const u8) []const u8 {
-    if (std.mem.startsWith(u8, path, "colors/")) return "a modifier's script returns a table with Modifier and apply, a palette style's with Style and apply";
+    if (std.mem.startsWith(u8, path, "colors/")) return "a modifier's script returns a table with Modifier and apply, a palette style's with Style and apply, a variation family's with Family and from";
     if (std.mem.startsWith(u8, path, "adapters/")) return "an adapter's script returns a table with name, extensions and the capabilities it gives";
     if (std.mem.startsWith(u8, path, "frontends/")) return "a frontend's script returns a table with name, extensions and load, and maybe variants and complete";
     return "an app's script returns a table with App, from, apply and maybe reload";
@@ -463,7 +472,7 @@ test "an app's fields come in the order written, with their types, defaults and 
     try testing.expectEqual(true, fields[5].default.?.value.boolean);
 }
 
-test "a modifier's and a palette style's fields and apply are read like an app's" {
+test "the fields and functions of a modifier, palette style and family are read like an app's" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     var context: Context = .{ .arena = arena.allocator(), .path = "colors/sepia.lua" };
@@ -492,9 +501,13 @@ test "a modifier's and a palette style's fields and apply are read like an app's
     try testing.expectEqualStrings("lift", style.fields[0].name);
     try testing.expectError(error.InvalidScript, declareStyle(&context, "return { Modifier = {}, apply = function() end }"));
     try testing.expectEqualStrings("colors/pastel.lua:1: the returned table sets 'Modifier'; it holds Style and apply", context.message.?);
+    context.path = "colors/glow.lua";
+    const family = try declareFamily(&context, "return { Family = { soft = kosm.Modifier }, from = function(mode) return {} end }");
+    try testing.expectEqualStrings("kosm.Modifier", family.fields[0].type.zig);
+    try testing.expectEqualStrings("from", family.functions[0]);
 }
 
-test "a script says whether it gives an app, a modifier, a palette style, an adapter or a frontend" {
+test "a script says whether it gives an app, modifier, palette style, family, adapter or frontend" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     var context: Context = .{ .arena = arena_state.allocator(), .path = "~~kosm_scratch/root.lua" };
@@ -503,8 +516,9 @@ test "a script says whether it gives an app, a modifier, a palette style, an ada
     try std.testing.expectEqual(.frontend, try declares(&context, "return { name = 'ini', extensions = { '.ini' }, load = function() end }"));
     try std.testing.expectEqual(.modifier, try declares(&context, "return { Modifier = { amount = kosm.float(1) }, apply = function() end }"));
     try std.testing.expectEqual(.style, try declares(&context, "return { Style = {}, apply = function() end }"));
+    try std.testing.expectEqual(.family, try declares(&context, "return { Family = { soft = kosm.Modifier }, from = function(mode) end }"));
     try std.testing.expectError(error.InvalidScript, declares(&context, "return { App = {}, Modifier = {} }"));
-    try std.testing.expectStringEndsWith(context.message.?, "holding both App and Modifier; an app's holds App, a modifier's Modifier, a palette style's Style, a frontend's load, so it is one of them");
+    try std.testing.expectStringEndsWith(context.message.?, "holding both App and Modifier; an app's holds App, a modifier's Modifier, a palette style's Style, a family's Family, a frontend's load, so it is one of them");
     try std.testing.expectError(error.InvalidScript, declares(&context, "return { App = {}, load = function() end }"));
     try std.testing.expectStringEndsWith(context.message.?, "so it is one of them");
     try std.testing.expectError(error.InvalidScript, declares(&context, "return { apply = function() end }"));
