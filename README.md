@@ -226,6 +226,31 @@ its contrast pick and alpha. As for an app, kosm generates its Zig module from t
 editing `apply` compiles nothing. An error in `apply` fails the apply naming the script's line,
 and nothing is written.
 
+## Palette styles in Lua
+
+A palette style of your own, for taking a theme from an image, is a script in `colors/` too. It
+declares its fields under `Style` and gives `apply(self, hue, background)`, which returns each hue's
+final color; nothing runs after it, so `kosm.Image.readable(color, background, contrast)` keeps it
+readable as the built-in styles do:
+
+```lua
+return {
+    --- Soft pastel hues.
+    Style = {
+        --- How far each hue is washed toward white, 0..1.
+        wash = kosm.float(0.5),
+    },
+    apply = function(self, hue, background)
+        local soft = hue:mix(kosm.Color.parse("#ffffff"), self.wash)
+        return kosm.Image.readable(soft, background, 4.5)
+    end,
+}
+```
+
+`pastel.style({ wash = 0.6 })` gives a `kosm.Image.Style`, for `Image.Options`' `style` or a
+kosmos' `Params` (`kosmoi.wallpaper({ style = pastel.style({ wash = 0.6 }) })`). Black and white
+move apart as for every built-in style but `literal`.
+
 ## Adapters in Lua
 
 An adapter is `adapters/<name>.lua`, or `adapters/<name>/root.lua`. It returns its data and the
