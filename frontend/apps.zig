@@ -1,7 +1,8 @@
-//! Apps written in Lua: what a script declares, read while kosm builds the config, and its
-//! functions, run in the one interpreter every app shares. The script returns a table:
+//! Apps and modifiers written in Lua: what a script declares, read while kosm builds the config,
+//! and its functions, run in the one interpreter every script shares. An app's script returns
 //! `{ App = { field = kosm.integer(0), ... }, from = function(theme) ... end,
-//! apply = function(self, output) ... end, reload = function(self, reloader) ... end }`.
+//! apply = function(self, output) ... end, reload = function(self, reloader) ... end }`, a
+//! modifier's `{ Modifier = { amount = kosm.float(1), ... }, apply = function(self, color) ... end }`.
 
 const std = @import("std");
 const kosm = @import("kosm");
@@ -25,8 +26,23 @@ const apps_field = "kosm.apps";
 /// How deep a field's types may nest (`kosm.list(kosm.optional(...))`).
 const max_depth = 16;
 
-/// The functions an app's script may give.
-const functions = [_][]const u8{ "from", "apply", "reload" };
+/// What an app's or a modifier's script returns: the table of its fields and the functions it
+/// may give.
+const Shape = struct {
+    /// The key of the table of fields: "App".
+    fields: [:0]const u8,
+    /// The functions the script may give.
+    functions: []const []const u8,
+    /// What the returned table holds, for messages: "App, from, apply and maybe reload".
+    holds: []const u8,
+    /// Whose script it is, for messages: "an app's".
+    whose: []const u8,
+};
+
+const app_shape: Shape = .{ .fields = "App", .functions = &.{ "from", "apply", "reload" }, .holds = "App, from, apply and maybe reload", .whose = "an app's" };
+const modifier_shape: Shape = .{ .fields = "Modifier", .functions = &.{"apply"}, .holds = "Modifier and apply", .whose = "a modifier's" };
+/// The most functions any shape gives.
+const max_functions = 3;
 
 /// Gives `kosm` the constructors of field types, run with `kosm`, the two metatables and
 /// whether kosm is reading a declaration. While it reads one no Zig code runs, so every other
@@ -65,7 +81,7 @@ const prelude =
     \\        return reference(rawget(self, "name") .. "." .. key)
     \\    end
     \\    reference_metatable.__call = function(self)
-    \\        error("'" .. rawget(self, "name") .. "' is called while kosm reads what the app declares, when no Zig code runs; call it inside from, apply or reload", 2)
+    \\        error("'" .. rawget(self, "name") .. "' is called while kosm reads what the script declares, when no Zig code runs; call it inside a function the script gives", 2)
     \\    end
     \\    setmetatable(kosm, { __index = function(_, key) return reference("kosm." .. key) end })
     \\    setmetatable(_G, { __index = function(_, name) return reference(name) end })
@@ -74,31 +90,45 @@ const prelude =
 
 /// Reads what the app script `source` declares, without calling any of its functions.
 pub fn declare(context: *Context, source: []const u8) Error!Declaration {
+    return declareShaped(context, source, app_shape);
+}
+
+/// Reads what the modifier script `source` declares, without calling any of its functions.
+pub fn declareModifier(context: *Context, source: []const u8) Error!Declaration {
+    return declareShaped(context, source, modifier_shape);
+}
+
+fn declareShaped(context: *Context, source: []const u8, shape: Shape) Error!Declaration {
     const interpreter = try Interpreter.init();
     defer interpreter.deinit();
     try installPrelude(interpreter, context, true);
     const chunk_name = try chunkName(context);
     if (interpreter.run(source, chunk_name)) |message| return context.fail("{s}", .{message});
-    var reader: Reader = .{ .context = context, .interpreter = interpreter, .lines = try .init(context.arena, source), .source = source };
+    var reader: Reader = .{ .context = context, .interpreter = interpreter, .lines = try .init(context.arena, source), .source = source, .shape = shape };
     return reader.declaration();
 }
 
-/// Says whether the script `source` gives an app (its table holds `App`), a frontend (`load`)
-/// or an adapter (`name` or `extensions`, with neither), without calling any of its functions.
+/// Says whether the script `source` gives an app (its table holds `App`), a modifier
+/// (`Modifier`), a frontend (`load`) or an adapter (`name` or `extensions`, with none of them),
+/// without calling any of its functions.
 pub fn declares(context: *Context, source: []const u8) Error!kosm.Frontend.Declared {
     const interpreter = try Interpreter.init();
     defer interpreter.deinit();
     try installPrelude(interpreter, context, true);
     if (interpreter.run(source, try chunkName(context))) |message| return context.fail("{s}", .{message});
-    if (interpreter.kind(-1) != .table) return context.fail("{s} returns {s}; a package's root script returns the table of an app, an adapter or a frontend", .{ context.path, Interpreter.describe(interpreter.kind(-1)) });
+    if (interpreter.kind(-1) != .table) return context.fail("{s} returns {s}; the script returns the table of an app, a modifier, an adapter or a frontend", .{ context.path, Interpreter.describe(interpreter.kind(-1)) });
     try interpreter.reserve(2);
-    const app = holds(interpreter, "App");
-    const frontend = holds(interpreter, "load");
-    if (app and frontend) return context.fail("{s} returns a table holding both App and load; an app's holds App, a frontend's load, so it is one of them", .{context.path});
-    if (app) return .app;
-    if (frontend) return .frontend;
+    const keys = [_][:0]const u8{ "App", "Modifier", "load" };
+    const kinds = [_]kosm.Frontend.Declared{ .app, .modifier, .frontend };
+    var found: ?usize = null;
+    for (keys, 0..) |key, position| {
+        if (!holds(interpreter, key)) continue;
+        if (found) |first| return context.fail("{s} returns a table holding both {s} and {s}; an app's holds App, a modifier's Modifier, a frontend's load, so it is one of them", .{ context.path, keys[first], key });
+        found = position;
+    }
+    if (found) |position| return kinds[position];
     if (holds(interpreter, "name") or holds(interpreter, "extensions")) return .adapter;
-    return context.fail("{s} returns a table holding none of App, load, name or extensions: an app's holds App, an adapter's name and extensions, a frontend's load", .{context.path});
+    return context.fail("{s} returns a table holding none of App, Modifier, load, name or extensions: an app's holds App, a modifier's Modifier, an adapter's name and extensions, a frontend's load", .{context.path});
 }
 
 /// Whether the table on top of the stack sets `key`.
@@ -114,8 +144,9 @@ fn holds(interpreter: Interpreter, key: [:0]const u8) bool {
 var shared: ?Interpreter = null;
 
 /// What the script at `path` returns, for messages: an adapter's in `adapters/`, a frontend's in
-/// `frontends/`, else an app's.
+/// `frontends/`, a modifier's in `colors/`, else an app's.
 fn shapeOf(path: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, path, "colors/")) return "a modifier's script returns a table with Modifier and apply";
     if (std.mem.startsWith(u8, path, "adapters/")) return "an adapter's script returns a table with name, extensions and the capabilities it gives";
     if (std.mem.startsWith(u8, path, "frontends/")) return "a frontend's script returns a table with name, extensions and load, and maybe variants and complete";
     return "an app's script returns a table with App, from, apply and maybe reload";
@@ -210,52 +241,55 @@ const Reader = struct {
     interpreter: Interpreter,
     lines: Lines,
     source: []const u8,
+    shape: Shape,
 
     fn declaration(reader: *Reader) Error!Declaration {
         const interpreter = reader.interpreter;
         const path = reader.context.path;
-        if (interpreter.kind(-1) != .table) return reader.context.fail("{s} returns {s}; an app's script returns a table with App, from, apply and maybe reload", .{ path, Interpreter.describe(interpreter.kind(-1)) });
+        const shape = reader.shape;
+        if (interpreter.kind(-1) != .table) return reader.context.fail("{s} returns {s}; {s} script returns a table with {s}", .{ path, Interpreter.describe(interpreter.kind(-1)), shape.whose, shape.holds });
         const table = interpreter.absolute(-1);
-        var given: [functions.len]bool = @splat(false);
+        var given: [max_functions]bool = @splat(false);
         try interpreter.reserve(4);
         interpreter.pushNil();
         while (interpreter.next(table)) {
-            const key = interpreter.string(-2) orelse return reader.context.fail("{s}: the returned table holds a {s} key; it holds App, from, apply and maybe reload", .{ path, Interpreter.describe(interpreter.kind(-2)) });
-            if (std.mem.eql(u8, key, "App")) {
+            const key = interpreter.string(-2) orelse return reader.context.fail("{s}: the returned table holds a {s} key; it holds {s}", .{ path, Interpreter.describe(interpreter.kind(-2)), shape.holds });
+            if (std.mem.eql(u8, key, shape.fields)) {
                 interpreter.pop(1);
                 continue;
             }
-            const known = for (functions, 0..) |function, position| {
+            const known = for (shape.functions, 0..) |function, position| {
                 if (std.mem.eql(u8, function, key)) break position;
-            } else return reader.failAt(&.{.{ .key = key }}, "the returned table sets '{s}'; it holds App, from, apply and maybe reload", .{key});
+            } else return reader.failAt(&.{.{ .key = key }}, "the returned table sets '{s}'; it holds {s}", .{ key, shape.holds });
             if (interpreter.kind(-1) != .function) return reader.failAt(&.{.{ .key = key }}, "{s} is {s}, not a function", .{ key, Interpreter.describe(interpreter.kind(-1)) });
             given[known] = true;
             interpreter.pop(1);
         }
-        interpreter.pushField(table, "App");
-        const app_fields = switch (interpreter.kind(-1)) {
+        interpreter.pushField(table, shape.fields);
+        const declared_fields = switch (interpreter.kind(-1)) {
             .nil => &.{},
             .table => try reader.readFields(interpreter.absolute(-1)),
-            else => |kind| return reader.failAt(&.{.{ .key = "App" }}, "App is {s}; it is a table of the app's fields, as App = {{ bars = kosm.integer(0) }}", .{Interpreter.describe(kind)}),
+            else => |kind| return reader.failAt(&.{.{ .key = shape.fields }}, "{s} is {s}; it is a table of the fields, as {s} = {{ size = kosm.integer(0) }}", .{ shape.fields, Interpreter.describe(kind), shape.fields }),
         };
         interpreter.pop(1);
         var gives: std.ArrayList([]const u8) = .empty;
-        for (functions, given) |function, is_given| {
+        for (shape.functions, given[0..shape.functions.len]) |function, is_given| {
             if (is_given) try gives.append(reader.context.arena, function);
         }
-        const app_line = reader.lines.find(&.{.{ .key = "App" }});
-        return .{ .fields = app_fields, .functions = gives.items, .doc = if (app_line) |line| try reader.docAbove(line) else null };
+        const fields_line = reader.lines.find(&.{.{ .key = shape.fields }});
+        return .{ .fields = declared_fields, .functions = gives.items, .doc = if (fields_line) |line| try reader.docAbove(line) else null };
     }
 
-    /// The fields of the App table at `table`, in the order the script writes them.
+    /// The fields of the table of fields at `table`, in the order the script writes them.
     fn readFields(reader: *Reader, table: c_int) Error![]const Declaration.Field {
         const interpreter = reader.interpreter;
+        const fields = reader.shape.fields;
         var found: std.ArrayList(Declaration.Field) = .empty;
         interpreter.pushNil();
         while (interpreter.next(table)) {
-            const name = interpreter.string(-2) orelse return reader.failAt(&.{.{ .key = "App" }}, "App holds a {s} key; its keys are the fields' names", .{Interpreter.describe(interpreter.kind(-2))});
+            const name = interpreter.string(-2) orelse return reader.failAt(&.{.{ .key = fields }}, "{s} holds a {s} key; its keys are the fields' names", .{ fields, Interpreter.describe(interpreter.kind(-2)) });
             const owned = try reader.context.arena.dupe(u8, name);
-            const line = reader.lines.find(&.{ .{ .key = "App" }, .{ .key = owned } }) orelse 0;
+            const line = reader.lines.find(&.{ .{ .key = fields }, .{ .key = owned } }) orelse 0;
             var default: ?Loose = null;
             const field_type = try reader.fieldType(-1, owned, line, &default, 0);
             try found.append(reader.context.arena, .{
@@ -280,7 +314,7 @@ const Reader = struct {
     /// The type the value at `index` gives field `name`, with its default in `default`.
     fn fieldType(reader: *Reader, index: c_int, name: []const u8, line: usize, default: *?Loose, depth: usize) Error!Declaration.Type {
         const interpreter = reader.interpreter;
-        if (depth > max_depth) return reader.failLine(line, "App.{s}: its types nest more than {d} deep", .{ name, max_depth });
+        if (depth > max_depth) return reader.failLine(line, "{s}.{s}: its types nest more than {d} deep", .{ reader.shape.fields, name, max_depth });
         const position = interpreter.absolute(index);
         try interpreter.reserve(4);
         if (reader.hasMetatable(position, reference_metatable)) {
@@ -289,7 +323,7 @@ const Reader = struct {
             return .{ .zig = try reader.context.arena.dupe(u8, interpreter.string(-1).?) };
         }
         if (!reader.hasMetatable(position, type_metatable))
-            return reader.failLine(line, "App.{s}: it is {s}, not a type; give kosm.boolean, kosm.integer, kosm.float or kosm.text (called with a default), kosm.optional(...), kosm.list(...) or a Zig type such as kosm.Color", .{ name, Interpreter.describe(interpreter.kind(position)) });
+            return reader.failLine(line, "{s}.{s}: it is {s}, not a type; give kosm.boolean, kosm.integer, kosm.float or kosm.text (called with a default), kosm.optional(...), kosm.list(...) or a Zig type such as kosm.Color", .{ reader.shape.fields, name, Interpreter.describe(interpreter.kind(position)) });
         interpreter.pushField(position, "kind");
         const kind = try reader.context.arena.dupe(u8, interpreter.string(-1).?);
         interpreter.pop(1);
@@ -299,7 +333,7 @@ const Reader = struct {
             const child = try reader.context.arena.create(Declaration.Type);
             child.* = try reader.fieldType(-1, name, line, default, depth + 1);
             if (std.mem.eql(u8, kind, "list")) {
-                if (default.* != null) return reader.failLine(line, "App.{s}: a list starts empty; its items take no default", .{name});
+                if (default.* != null) return reader.failLine(line, "{s}.{s}: a list starts empty; its items take no default", .{ reader.shape.fields, name });
                 return .{ .list = child };
             }
             return .{ .optional = child };
@@ -313,7 +347,7 @@ const Reader = struct {
             .integer => .{ .value = .{ .integer = interpreter.integer(-1) } },
             .float => .{ .value = .{ .float = interpreter.float(-1) } },
             .string => .{ .value = .{ .string = try reader.context.arena.dupe(u8, interpreter.string(-1).?) } },
-            else => |given| return reader.failLine(line, "App.{s}: a default is a boolean, number or string, not {s}", .{ name, Interpreter.describe(given) }),
+            else => |given| return reader.failLine(line, "{s}.{s}: a default is a boolean, number or string, not {s}", .{ reader.shape.fields, name, Interpreter.describe(given) }),
         };
         return scalar;
     }
@@ -421,13 +455,42 @@ test "an app's fields come in the order written, with their types, defaults and 
     try testing.expectEqual(true, fields[5].default.?.value.boolean);
 }
 
-test "a package's root script says whether it gives an app, an adapter or a frontend" {
+test "a modifier's fields and apply are read like an app's" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var context: Context = .{ .arena = arena.allocator(), .path = "colors/sepia.lua" };
+    const declaration = try declareModifier(&context,
+        \\return {
+        \\    --- Tints toward sepia.
+        \\    Modifier = {
+        \\        --- How far toward sepia, 0..1.
+        \\        amount = kosm.float(1),
+        \\    },
+        \\    apply = function(self, color) return color end,
+        \\}
+    );
+    try testing.expectEqualStrings("Tints toward sepia.", declaration.doc.?);
+    try testing.expectEqual(1, declaration.functions.len);
+    try testing.expectEqualStrings("apply", declaration.functions[0]);
+    try testing.expectEqualStrings("amount", declaration.fields[0].name);
+    try testing.expectEqualStrings("How far toward sepia, 0..1.", declaration.fields[0].doc.?);
+    try testing.expectEqual(.float, declaration.fields[0].type);
+    try testing.expectError(error.InvalidScript, declareModifier(&context, "return { Modifier = {}, from = function(theme) end }"));
+    try testing.expectEqualStrings("colors/sepia.lua:1: the returned table sets 'from'; it holds Modifier and apply", context.message.?);
+    try testing.expectError(error.InvalidScript, declareModifier(&context, "return { Modifier = { amount = 1 }, apply = function() end }"));
+    try testing.expectStringStartsWith(context.message.?, "colors/sepia.lua:1: Modifier.amount: it is an integer, not a type");
+}
+
+test "a script says whether it gives an app, a modifier, an adapter or a frontend" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     var context: Context = .{ .arena = arena_state.allocator(), .path = "~~kosm_scratch/root.lua" };
     try std.testing.expectEqual(.app, try declares(&context, "return { App = { size = kosm.integer(1) }, apply = function() end }"));
     try std.testing.expectEqual(.adapter, try declares(&context, "return { name = 'keys', extensions = { '.keys' } }"));
     try std.testing.expectEqual(.frontend, try declares(&context, "return { name = 'ini', extensions = { '.ini' }, load = function() end }"));
+    try std.testing.expectEqual(.modifier, try declares(&context, "return { Modifier = { amount = kosm.float(1) }, apply = function() end }"));
+    try std.testing.expectError(error.InvalidScript, declares(&context, "return { App = {}, Modifier = {} }"));
+    try std.testing.expectStringEndsWith(context.message.?, "holding both App and Modifier; an app's holds App, a modifier's Modifier, a frontend's load, so it is one of them");
     try std.testing.expectError(error.InvalidScript, declares(&context, "return { App = {}, load = function() end }"));
     try std.testing.expectStringEndsWith(context.message.?, "so it is one of them");
     try std.testing.expectError(error.InvalidScript, declares(&context, "return { apply = function() end }"));
@@ -453,7 +516,7 @@ test "a declaration kosm cannot read fails naming the script's line" {
     try expectDeclareFailure(
         \\local color = kosm.Color.parseHex("#ffffff")
         \\return { App = {}, apply = function(self, output) end }
-    , "apps/cava/root.lua:1: 'kosm.Color.parseHex' is called while kosm reads what the app declares, when no Zig code runs; call it inside from, apply or reload");
+    , "apps/cava/root.lua:1: 'kosm.Color.parseHex' is called while kosm reads what the script declares, when no Zig code runs; call it inside a function the script gives");
     try expectDeclareFailure(
         \\return { App = { bars = kosm.optional(3) }, apply = function(self, output) end }
     , "apps/cava/root.lua:1: kosm.optional takes a type, as kosm.integer or kosm_cursor.App");

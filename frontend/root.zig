@@ -27,6 +27,7 @@ pub const frontend: kosm.Frontend = .{
     .complete = completion.complete,
     .editor_file = completion.editor_file,
     .declare = apps.declare,
+    .declare_modifier = apps.declareModifier,
     .declare_adapter = adapters.declare,
     .declare_frontend = frontends.declare,
     .declares = apps.declares,

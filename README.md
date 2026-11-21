@@ -201,6 +201,31 @@ fields rebuilds once. While kosm reads the declaration no Zig code runs, so a ca
 functions fails naming its line. Every app's script runs in one Lua state, each with globals of its
 own. A Lua table has no order, so the tables an app writes come sorted by key.
 
+## Modifiers in Lua
+
+A modifier of your own is `colors/<name>.lua`, or `colors/<name>/root.lua`. It declares its fields
+as an app does, under `Modifier`, and gives `apply(self, color)`, which returns the new color:
+
+```lua
+return {
+    --- Tints a color toward sepia.
+    Modifier = {
+        --- How far toward sepia, 0..1.
+        amount = kosm.float(1),
+    },
+    apply = function(self, color)
+        return color:mix(kosm.Color.parse("#704214"), self.amount)
+    end,
+}
+```
+
+`sepia.modifier({ amount = 0.5 })` gives it as a `kosm.Modifier`, to set wherever a modifier goes
+(`theme.variations.state.inactive`, kitty's `bright`) or to compose with `then`; Zig calls the
+same `sepia.modifier(.{ .amount = 0.5 })`. It runs after the modifier's deltas and mix, and before
+its contrast pick and alpha. As for an app, kosm generates its Zig module from the declaration, so
+editing `apply` compiles nothing. An error in `apply` fails the apply naming the script's line,
+and nothing is written.
+
 ## Adapters in Lua
 
 An adapter is `adapters/<name>.lua`, or `adapters/<name>/root.lua`. It returns its data and the
