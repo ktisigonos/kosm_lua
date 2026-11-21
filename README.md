@@ -350,9 +350,17 @@ The frontend is a module of its own, `kosm_lua_frontend`: packages using only th
 A package of its own repository may be written in Lua: `root.lua` in place of `root.zig`,
 beside the one-line `build.zig` and a `build.zig.zon` depending on `kosm` and `kosm_lua`.
 `kosm new package my_bar --language lua` writes all three into `./my_bar/`, `root.lua` holding
-an app. The script returns an app's table (it holds `App`), an adapter's (`name` and
-`extensions`) or a frontend's (`load`), and the package's build generates its Zig module from
-it, so Zig kosmoi and packages import it like any package. Add Zig packages whose types its
-fields name (`cursor = kosm_cursor.App`) to its `build.zig.zon`. A config wearing it lists it
-itself, even when it comes through another package, since kosm finds the script through the
-package's folder (`~~my_bar/root.lua`), which errors name.
+an app. The script returns an app's table (it holds `App`), a modifier's (`Modifier`), a palette
+style's (`Style`), a variation family's (`Family`), an adapter's (`name` and `extensions`), a
+frontend's (`load`) or, holding none of them, a kosmos' table, and the package's build generates
+its Zig module from it, so Zig kosmoi and packages import it like any package. Add Zig packages
+whose types its fields name (`cursor = kosm_cursor.App`) to its `build.zig.zon`.
+
+A package's kosmos is applied by the package's name (`kosm apply my_frost`,
+`kosm apply my_frost.light` for a variant), and kosmoi build on it like on a Zig package's:
+`base = "my_frost"` in Lua, `.{ .name = "my_frost" }` in a Zig kosmos' `kosm.Kosmos` field.
+Relative paths it gives start from the package's folder.
+
+Kosm finds a package's script through the package's folder (`~~my_bar/root.lua`), which errors
+name. A config needs to list only the packages it uses itself: a Lua package that comes only
+through another package is found too.

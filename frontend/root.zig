@@ -38,6 +38,7 @@ pub const frontend: kosm.Frontend = .{
     .scaffolds = .{
         .kosmos = @embedFile("scaffolds/kosmos.lua"),
         .app = @embedFile("scaffolds/app.lua"),
+        .package = @embedFile("scaffolds/package.lua"),
         .adapter = @embedFile("scaffolds/adapter.lua"),
         .frontend = @embedFile("scaffolds/frontend.lua"),
         .modifier = @embedFile("scaffolds/modifier.lua"),
