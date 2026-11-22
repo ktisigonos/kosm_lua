@@ -58,8 +58,10 @@ fn load(context: *kosm.Frontend.Context, source: []const u8) kosm.Frontend.Error
     const interpreter = try Interpreter.init();
     defer interpreter.deinit();
     try Bridge.install(interpreter, context);
+    try apps.installExports(interpreter, context);
     const chunk_name = try context.arena.dupeSentinel(u8, try context.arena.print("={s}", .{context.path}), 0);
     if (interpreter.run(source, chunk_name)) |message| return context.fail("{s}", .{message});
+    try apps.refuseExports(interpreter, context, source);
 
     var reader: Reader = .{
         .context = context,
@@ -75,8 +77,10 @@ fn variants(context: *kosm.Frontend.Context, source: []const u8) kosm.Frontend.E
     const interpreter = try Interpreter.init();
     defer interpreter.deinit();
     try Bridge.install(interpreter, context);
+    try apps.installExports(interpreter, context);
     const chunk_name = try context.arena.dupeSentinel(u8, try context.arena.print("={s}", .{context.path}), 0);
     if (interpreter.run(source, chunk_name)) |message| return context.fail("{s}", .{message});
+    try apps.refuseExports(interpreter, context, source);
 
     var reader: Reader = .{
         .context = context,
@@ -754,4 +758,19 @@ test "every scaffold reads with its name in place: the kosmos and its variant, t
     const family = try apps.declareFamily(&color_context, try testScaffold(arena, scaffolds.family, "glow"));
     try testing.expectEqualStrings("kosm.Modifier", family.fields[1].type.zig);
     try testing.expectEqualStrings("from", family.functions[0]);
+}
+
+test "a kosmos script exporting values kosm cannot read when it builds fails saying why" {
+    var fixture: Fixture = undefined;
+    fixture.init();
+    defer fixture.deinit();
+    fixture.context.library = test_library.library;
+    try fixture.expectFailure(
+        "local box = demo.box(1)\nreturn { look = kosm.value(demo, function() return box end) }\n",
+        "kosmoi/mine.lua:1: 'demo.box' is called while kosm reads what the script declares, when no Zig code runs; call it inside a function the script gives",
+    );
+    try fixture.expectFailure(
+        "return { look = kosm.value(demo, function() return {} end) }\n",
+        "kosmoi/mine.lua exports values, which its module gives, but that module is older than the script; kosm build brings it up to date",
+    );
 }

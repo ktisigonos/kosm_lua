@@ -397,6 +397,14 @@ called whenever Zig calls that field; only tables carry one, so it cannot be set
 from Zig. A script exporting values gives its kosmos as a value too. A field of a Zig type
 without defaults for every field (`kosm_base.Base`) is `kosm.optional`.
 
+A kosmos in the config exports values the same way: `kosmoi/frost/root.lua` (or `kosmoi/frost.lua`)
+returning `look = kosm.value(...)` is worn by every kosmos of the config as `frost.look()`, from
+Lua and Zig alike, and its kosmos and variants are applied as `kosm apply frost` and
+`kosm apply frost.light`. Other scripts in its folder (`kosmoi/frost/iced.lua`) are its variants,
+building on it like any script. As kosm reads what a script exports when it builds, editing it
+runs a build, which compiles nothing unless what it exports changed; it calls Zig code only
+inside the functions it gives.
+
 Kosm finds a package's script through the package's folder (`~~my_bar/root.lua`), which errors
 name. A config needs to list only the packages it uses itself: a Lua package that comes only
 through another package is found too.

@@ -191,6 +191,25 @@ pub fn declares(context: *Context, source: []const u8) Error!kosm.Frontend.Decla
     return .kosmos;
 }
 
+/// Gives a kosmos script, run on `interpreter`, the constructors of exported values, so that one
+/// exporting values runs to its end and `refuseExports` can say why it is read as a kosmos.
+pub fn installExports(interpreter: Interpreter, context: *Context) Error!void {
+    try installPrelude(interpreter, context, false);
+}
+
+/// Fails when the kosmos script `source`, whose table is on top of the stack, exports values:
+/// its module gives its kosmoi, so the runner reads it as a script only when kosm could not
+/// read what it exports when it built, which the message says.
+pub fn refuseExports(interpreter: Interpreter, context: *Context, source: []const u8) Error!void {
+    if (interpreter.kind(-1) != .table or !holdsExport(interpreter)) return;
+    var reading: Context = .{ .arena = context.arena, .path = context.path };
+    _ = declares(&reading, source) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidScript => return context.fail("{s}", .{reading.message orelse "it exports values, but kosm cannot read them"}),
+    };
+    return context.fail("{s} exports values, which its module gives, but that module is older than the script; kosm build brings it up to date", .{context.path});
+}
+
 /// Whether the table on top of the stack holds a value of `kosm.value` or `kosm.takes`.
 fn holdsExport(interpreter: Interpreter) bool {
     const table = interpreter.absolute(-1);
@@ -236,7 +255,7 @@ fn shapeOf(path: []const u8) []const u8 {
     if (std.mem.startsWith(u8, path, "colors/")) return "a modifier's script returns a table with Modifier and apply, a palette style's with Style and apply, a variation family's with Family and from";
     if (std.mem.startsWith(u8, path, "adapters/")) return "an adapter's script returns a table with name, extensions and the capabilities it gives";
     if (std.mem.startsWith(u8, path, "frontends/")) return "a frontend's script returns a table with name, extensions and load, and maybe variants and complete";
-    if (std.mem.startsWith(u8, path, "~~")) return "a package's root script returns a table of what it gives, its values as kosm.value(T, function() ... end)";
+    if (std.mem.startsWith(u8, path, "~~") or std.mem.startsWith(u8, path, "kosmoi/")) return "a kosmos script exporting values returns a table of what it gives, its values as kosm.value(T, function() ... end)";
     return "an app's script returns a table with App, from, apply and maybe reload";
 }
 
