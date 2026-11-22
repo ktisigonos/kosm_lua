@@ -390,6 +390,37 @@ return {
 }
 ```
 
+A script exporting values may declare other structs as it declares `Base`, under a capitalized
+name, and a function taking one is a variant with `Params`: kosm fills them from flags and loads
+the images and kosmoi they name, as for a Zig kosmos.
+
+```lua
+--- `--wallpaper <file or folder>` takes the colors from another picture.
+local Params = {
+    --- The picture the colors come from.
+    wallpaper = kosm.default(kosm.Image, { path = "~/Pictures/Backgrounds/" }),
+    --- The kosmos this one builds on.
+    on = kosm.kosmos(Base, "my_frost"),
+}
+
+return {
+    Base = Base,
+    Params = Params,
+    -- kosm apply my_frost.image --wallpaper ~/Pictures/dune.png
+    image = kosm.takes(Params, function(params)
+        local theme = kosm.Theme.from(params.wallpaper:themeInput({ style = "vivid" }))
+        return { official = kosm_base.fromTheme(my_frost.look(), theme, "all") }
+    end),
+}
+```
+
+`kosm.default(T, table)` gives a field of a Zig type its default as plain values (text, numbers,
+booleans and tables), and `kosm.kosmos(Base, name)` a field naming a kosmos whose tree is the
+script's `Base`; a field holding an enum or a color in such a default is set in the function
+instead. `kosm.takes` gives the script's `Base` from any parameters: `kosm.text`, `kosm.integer`,
+`kosm.float` and `kosm.boolean` stand for plain ones (`themed = kosm.takes(kosm.Theme.Input,
+kosm.text, function(input, name) ... end)`), which only a call from Lua or Zig gives.
+
 Its Zig module gives `my_frost.look()`, `my_frost.Base`, `my_frost.from(look)` and
 `my_frost.kosmos()`, used from Zig and Lua alike (`kosm_base.from(my_frost.look(), .all)`,
 `my_frost.from(my_frost.look())`). A function in a table a value returns (a look's `tweak`) is

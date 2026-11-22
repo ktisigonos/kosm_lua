@@ -84,6 +84,21 @@ const prelude =
     \\        return setmetatable({ kind = kind, child = child }, type_metatable)
     \\    end)
     \\end
+    \\rawset(kosm, "default", function(of, value)
+    \\    if not isType(of) then
+    \\        error("kosm.default takes a Zig type, then its default: kosm.default(kosm.Image, { path = \"~/Pictures\" })", 2)
+    \\    end
+    \\    if type(value) ~= "table" then
+    \\        error("kosm.default takes the default as a table after the type: kosm.default(kosm.Image, { path = \"~/Pictures\" })", 2)
+    \\    end
+    \\    return setmetatable({ kind = "default", child = of, default = value }, type_metatable)
+    \\end)
+    \\rawset(kosm, "kosmos", function(tree, name)
+    \\    if type(tree) ~= "table" or type(name) ~= "string" then
+    \\        error("kosm.kosmos takes the type of the tree, a struct the script declares, then the kosmos it names by default: kosm.kosmos(Base, \"personal.nord\")", 2)
+    \\    end
+    \\    return setmetatable({ kind = "kosmos", tree = tree, default = { name = name } }, type_metatable)
+    \\end)
     \\rawset(kosm, "value", function(of, build)
     \\    if of == nil then
     \\        error("kosm.value takes the value's Zig type, then the function building it: kosm.value(kosm_base.Look, function() ... end)", 2)
@@ -233,6 +248,24 @@ fn isExport(interpreter: Interpreter, index: c_int) bool {
     defer c.lua_settop(state, -3);
     return c.lua_rawequal(state, -1, -2) != 0;
 }
+
+/// A struct an exporting script declares, by its key, and where its table of fields is on the
+/// stack while the script's declaration is read.
+const StructTable = struct {
+    name: [:0]const u8,
+    position: c_int,
+};
+
+/// Whether `key` of an exporting script's table names a struct it declares: it starts with a
+/// capital letter, as Zig names types.
+fn isStructName(key: []const u8) bool {
+    return key.len != 0 and std.ascii.isUpper(key[0]);
+}
+
+/// The kinds of `kosm.boolean`, `kosm.integer`, `kosm.float` and `kosm.text`, and the Zig types
+/// a parameter of each has.
+const scalar_kinds = [_][]const u8{ "boolean", "integer", "float", "text" };
+const scalar_types = [_][]const u8{ "bool", "i64", "f64", "[]const u8" };
 
 /// The key of the base a package's root script declares.
 const base_key = kosm.Frontend.ExportsDeclaration.base_name;
@@ -400,6 +433,8 @@ const Reader = struct {
     lines: Lines,
     source: []const u8,
     shape: Shape,
+    /// The structs an exporting script declares, which types may name.
+    structs: []const StructTable = &.{},
 
     fn declaration(reader: *Reader) Error!Declaration {
         const interpreter = reader.interpreter;
@@ -449,10 +484,25 @@ const Reader = struct {
         interpreter.pushField(table, base_key);
         const base_table: ?c_int = if (interpreter.kind(-1) == .table) interpreter.absolute(-1) else if (interpreter.kind(-1) == .nil) null else return reader.failAt(&.{.{ .key = base_key }}, "{s} is {s}; it is a table of the base's fields, as {s} = {{ official = kosm_base.Base }}", .{ base_key, Interpreter.describe(interpreter.kind(-1)), base_key });
         var values: std.ArrayList(kosm.Frontend.ExportsDeclaration.Value) = .empty;
+        var structs: std.ArrayList(StructTable) = .empty;
+        if (base_table) |position| try structs.append(arena, .{ .name = base_key, .position = position });
         interpreter.pushNil();
         while (interpreter.next(table)) {
             const key = interpreter.string(-2) orelse return reader.context.fail("{s}: the returned table holds a {s} key; its keys name what it exports", .{ path, Interpreter.describe(interpreter.kind(-2)) });
-            if (std.mem.eql(u8, key, base_key)) {
+            if (!std.mem.eql(u8, key, base_key) and isStructName(key) and interpreter.kind(-1) == .table and !isExport(interpreter, -1)) {
+                // Kept on the stack below the walk, so its position stays valid while it is read.
+                interpreter.pushCopy(-1);
+                c.lua_rotate(interpreter.state, -3, 1);
+                try structs.append(arena, .{ .name = try arena.dupeSentinel(u8, key, 0), .position = interpreter.absolute(-3) });
+                try interpreter.reserve(6);
+            }
+            interpreter.pop(1);
+        }
+        reader.structs = structs.items;
+        interpreter.pushNil();
+        while (interpreter.next(table)) {
+            const key = interpreter.string(-2).?;
+            if (std.mem.eql(u8, key, base_key) or reader.structNamed(key) != null) {
                 interpreter.pop(1);
                 continue;
             }
@@ -468,8 +518,43 @@ const Reader = struct {
             declared.base_line = reader.lines.find(&.{.{ .key = base_key }}) orelse 0;
             if (declared.base_line != 0) declared.base_doc = try reader.docAbove(declared.base_line);
         }
-        interpreter.pop(1);
+        var others: std.ArrayList(kosm.Frontend.ExportsDeclaration.Struct) = .empty;
+        for (reader.structs) |declared_struct| {
+            if (std.mem.eql(u8, declared_struct.name, base_key)) continue;
+            reader.shape.fields = declared_struct.name;
+            const line = reader.lines.find(&.{.{ .key = declared_struct.name }}) orelse 0;
+            try others.append(arena, .{
+                .name = declared_struct.name,
+                .fields = try reader.readFields(declared_struct.position),
+                .line = line,
+                .doc = if (line != 0) try reader.docAbove(line) else null,
+            });
+        }
+        std.mem.sort(kosm.Frontend.ExportsDeclaration.Struct, others.items, {}, structLessThan);
+        declared.structs = others.items;
+        interpreter.pop(@intCast(others.items.len + 1));
         return declared;
+    }
+
+    fn structLessThan(_: void, left: kosm.Frontend.ExportsDeclaration.Struct, right: kosm.Frontend.ExportsDeclaration.Struct) bool {
+        if (left.line != right.line) return left.line < right.line;
+        return std.mem.order(u8, left.name, right.name) == .lt;
+    }
+
+    /// The struct the script declares named `name`, or null.
+    fn structNamed(reader: *Reader, name: []const u8) ?StructTable {
+        for (reader.structs) |declared| {
+            if (std.mem.eql(u8, declared.name, name)) return declared;
+        }
+        return null;
+    }
+
+    /// The name of the struct the script declares that the table at `position` is, or null.
+    fn structAt(reader: *Reader, position: c_int) ?[]const u8 {
+        for (reader.structs) |declared| {
+            if (c.lua_rawequal(reader.interpreter.state, position, declared.position) != 0) return declared.name;
+        }
+        return null;
     }
 
     /// The value `name` the export at `position` gives; `base_table` is the base the script
@@ -485,10 +570,10 @@ const Reader = struct {
         if (!takes) {
             interpreter.pushField(position, "type");
             defer interpreter.pop(1);
-            value.type = try reader.typeName(-1, name, line, base_table);
+            value.type = try reader.typeName(-1, name, line, base_table, false);
             return value;
         }
-        if (!std.mem.eql(u8, name, "from")) return reader.failLine(line, "{s}: kosm.takes gives a base's from, so only from is one; give a value as kosm.value(T, function() ... end)", .{name});
+        // What a function takes, a base's `from` or a kosmos' `Params`, it builds the base from.
         value.type = base_key;
         interpreter.pushField(position, "types");
         const types = interpreter.absolute(-1);
@@ -504,7 +589,7 @@ const Reader = struct {
             const parameter_name = c.lua_getlocal(interpreter.state, null, @intCast(position_in_list));
             interpreter.pop(1);
             const given = parameter_name orelse return reader.failLine(line, "{s}: kosm.takes names {d} types, but its function takes {d} parameters", .{ name, count, position_in_list - 1 });
-            parameter.* = .{ .name = try arena.dupe(u8, std.mem.span(given)), .type = try reader.typeName(-1, name, line, base_table) };
+            parameter.* = .{ .name = try arena.dupe(u8, std.mem.span(given)), .type = try reader.typeName(-1, name, line, base_table, true) };
         }
         interpreter.pushCopy(build);
         const extra = c.lua_getlocal(interpreter.state, null, @intCast(count + 1));
@@ -514,16 +599,25 @@ const Reader = struct {
         return value;
     }
 
-    /// The Zig type the value at `index` names for export `name`: a Zig type by its name, or
-    /// the base the script declares.
-    fn typeName(reader: *Reader, index: c_int, name: []const u8, line: usize, base_table: ?c_int) Error![]const u8 {
+    /// The Zig type the value at `index` names for export `name`: a Zig type by its name, a
+    /// struct the script declares, or with `scalars` (a parameter's) a plain type as Zig spells it.
+    fn typeName(reader: *Reader, index: c_int, name: []const u8, line: usize, base_table: ?c_int, scalars: bool) Error![]const u8 {
         const interpreter = reader.interpreter;
         const position = interpreter.absolute(index);
         if (base_table) |base| {
             if (c.lua_rawequal(interpreter.state, position, base) != 0) return base_key;
         }
+        if (reader.structAt(position)) |declared| return declared;
+        if (scalars and reader.hasMetatable(position, type_metatable)) {
+            interpreter.pushField(position, "kind");
+            defer interpreter.pop(1);
+            const kind = interpreter.string(-1).?;
+            for (scalar_kinds, scalar_types) |scalar, zig_type| {
+                if (std.mem.eql(u8, kind, scalar)) return zig_type;
+            }
+        }
         if (!reader.hasMetatable(position, reference_metatable))
-            return reader.failLine(line, "{s}: its type is {s}; name a Zig type, as kosm_base.Look, or the script's own {s}", .{ name, Interpreter.describe(interpreter.kind(position)), base_key });
+            return reader.failLine(line, "{s}: its type is {s}; name a Zig type, as kosm_base.Look, kosm.text, or a struct the script declares, as {s}", .{ name, Interpreter.describe(interpreter.kind(position)), base_key });
         interpreter.pushField(position, "name");
         defer interpreter.pop(1);
         return reader.context.arena.dupe(u8, interpreter.string(-1).?);
@@ -576,11 +670,38 @@ const Reader = struct {
             defer interpreter.pop(1);
             return .{ .zig = try reader.context.arena.dupe(u8, interpreter.string(-1).?) };
         }
+        if (interpreter.kind(position) == .table) {
+            if (reader.structAt(position)) |declared| return .{ .declared = declared };
+        }
         if (!reader.hasMetatable(position, type_metatable))
             return reader.failLine(line, "{s}.{s}: it is {s}, not a type; give kosm.boolean, kosm.integer, kosm.float or kosm.text (called with a default), kosm.optional(...), kosm.list(...) or a Zig type such as kosm.Color", .{ reader.shape.fields, name, Interpreter.describe(interpreter.kind(position)) });
         interpreter.pushField(position, "kind");
         const kind = try reader.context.arena.dupe(u8, interpreter.string(-1).?);
         interpreter.pop(1);
+        if (std.mem.eql(u8, kind, "default")) {
+            interpreter.pushField(position, "child");
+            const child = interpreter.absolute(-1);
+            defer interpreter.pop(1);
+            if (!reader.hasMetatable(child, reference_metatable)) return reader.failLine(line, "{s}.{s}: kosm.default takes a Zig type, as kosm.Image", .{ reader.shape.fields, name });
+            interpreter.pushField(child, "name");
+            const type_name = try reader.context.arena.dupe(u8, interpreter.string(-1).?);
+            interpreter.pop(1);
+            interpreter.pushField(position, "default");
+            defer interpreter.pop(1);
+            default.* = try reader.plainValue(-1, name, line, 0);
+            return .{ .zig = type_name };
+        }
+        if (std.mem.eql(u8, kind, "kosmos")) {
+            interpreter.pushField(position, "tree");
+            const tree = reader.structAt(interpreter.absolute(-1));
+            interpreter.pop(1);
+            const declared = tree orelse return reader.failLine(line, "{s}.{s}: kosm.kosmos takes the type of the tree as a struct the script declares, as {s}", .{ reader.shape.fields, name, base_key });
+            interpreter.pushField(position, "default");
+            defer interpreter.pop(1);
+            default.* = try reader.plainValue(-1, name, line, 0);
+            const arguments = try reader.context.arena.dupe(Declaration.Type, &.{.{ .declared = declared }});
+            return .{ .applied = .{ .function = "kosm.Kosmos", .arguments = arguments } };
+        }
         if (std.mem.eql(u8, kind, "optional") or std.mem.eql(u8, kind, "list")) {
             interpreter.pushField(position, "child");
             defer interpreter.pop(1);
@@ -604,6 +725,47 @@ const Reader = struct {
             else => |given| return reader.failLine(line, "{s}.{s}: a default is a boolean, number or string, not {s}", .{ reader.shape.fields, name, Interpreter.describe(given) }),
         };
         return scalar;
+    }
+
+    /// The plain value at `index`, a default field `name` gives: a table by its keys in order of
+    /// their names, a sequence as a list, text, numbers and booleans.
+    fn plainValue(reader: *Reader, index: c_int, name: []const u8, line: usize, depth: usize) Error!Loose {
+        const interpreter = reader.interpreter;
+        const arena = reader.context.arena;
+        if (depth > max_depth) return reader.failLine(line, "{s}.{s}: its default nests more than {d} deep", .{ reader.shape.fields, name, max_depth });
+        const position = interpreter.absolute(index);
+        try interpreter.reserve(4);
+        switch (interpreter.kind(position)) {
+            .boolean => return .{ .value = .{ .boolean = interpreter.boolean(position) } },
+            .integer => return .{ .value = .{ .integer = interpreter.integer(position) } },
+            .float => return .{ .value = .{ .float = interpreter.float(position) } },
+            .string => return .{ .value = .{ .string = try arena.dupe(u8, interpreter.string(position).?) } },
+            .table => {},
+            else => |given| return reader.failLine(line, "{s}.{s}: a default holds tables, text, numbers and booleans, not {s}", .{ reader.shape.fields, name, Interpreter.describe(given) }),
+        }
+        const length: usize = @intCast(c.lua_rawlen(interpreter.state, position));
+        if (length != 0) {
+            const items = try arena.alloc(Loose, length);
+            for (items, 1..) |*item, item_position| {
+                interpreter.pushItem(position, @intCast(item_position));
+                defer interpreter.pop(1);
+                item.* = try reader.plainValue(-1, name, line, depth + 1);
+            }
+            return .{ .value = .{ .list = items } };
+        }
+        var entries: std.ArrayList(Loose.Entry) = .empty;
+        interpreter.pushNil();
+        while (interpreter.next(position)) {
+            const key = interpreter.string(-2) orelse return reader.failLine(line, "{s}.{s}: a default's tables have names as keys", .{ reader.shape.fields, name });
+            try entries.append(arena, .{ .key = try arena.dupe(u8, key), .value = try reader.plainValue(-1, name, line, depth + 1) });
+            interpreter.pop(1);
+        }
+        std.mem.sort(Loose.Entry, entries.items, {}, entryLessThan);
+        return .{ .value = .{ .table = entries.items } };
+    }
+
+    fn entryLessThan(_: void, left: Loose.Entry, right: Loose.Entry) bool {
+        return std.mem.order(u8, left.key, right.key) == .lt;
     }
 
     /// Whether the value at `position` has the metatable registered as `name`.
@@ -898,6 +1060,55 @@ fn expectExportsFailure(source: []const u8, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, context.message.?);
 }
 
+test "an exporting script's other structs are read like its base, and variants taking them are typed" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var context: Context = .{ .arena = arena.allocator(), .path = "kosmoi/frost/root.lua" };
+    const script =
+        \\local Base = { base = kosm.optional(kosm_base.Base) }
+        \\--- What the image takes.
+        \\local Params = {
+        \\    --- The picture.
+        \\    wallpaper = kosm.default(kosm.Image, { path = "~/walls", sizes = { 1, 2.5 } }),
+        \\    --- The kosmos below.
+        \\    on = kosm.kosmos(Base, "frost.huge"),
+        \\    size = kosm.integer(3),
+        \\}
+        \\return {
+        \\    Base = Base,
+        \\    Params = Params,
+        \\    image = kosm.takes(Params, function(params) end),
+        \\    named = kosm.takes(kosm.text, kosm.float, function(name, size) end),
+        \\}
+    ;
+    const declared = try declareExports(&context, script);
+    try testing.expectEqual(1, declared.structs.len);
+    const params = declared.structs[0];
+    try testing.expectEqualStrings("Params", params.name);
+    try testing.expectEqual(3, params.fields.len);
+    const wallpaper = params.fields[0];
+    try testing.expectEqualStrings("wallpaper", wallpaper.name);
+    try testing.expectEqualStrings("kosm.Image", wallpaper.type.zig);
+    try testing.expectEqualStrings("The picture.", wallpaper.doc.?);
+    const entries = wallpaper.default.?.value.table;
+    try testing.expectEqualStrings("path", entries[0].key);
+    try testing.expectEqualStrings("~/walls", entries[0].value.value.string);
+    try testing.expectEqualStrings("sizes", entries[1].key);
+    try testing.expectEqual(2.5, entries[1].value.value.list[1].value.float);
+    const on = params.fields[1];
+    try testing.expectEqualStrings("kosm.Kosmos", on.type.applied.function);
+    try testing.expectEqualStrings("Base", on.type.applied.arguments[0].declared);
+    try testing.expectEqualStrings("frost.huge", on.default.?.value.table[0].value.value.string);
+    try testing.expectEqual(.integer, params.fields[2].type);
+    const image = declared.values[0];
+    try testing.expectEqualStrings("image", image.name);
+    try testing.expectEqualStrings("Base", image.type);
+    try testing.expectEqualStrings("Params", image.parameters[0].type);
+    const named = declared.values[1];
+    try testing.expectEqualStrings("[]const u8", named.parameters[0].type);
+    try testing.expectEqualStrings("f64", named.parameters[1].type);
+}
+
 test "exports kosm cannot read fail naming the script's line" {
     try expectExportsFailure(
         \\return {
@@ -907,9 +1118,9 @@ test "exports kosm cannot read fail naming the script's line" {
     , "~~kosm_frost/root.lua:3: 'kosmos' is a function; a script exporting values gives each as kosm.value(T, function() ... end), its kosmos too, and a base's from as kosm.takes(T, function(look) ... end)");
     try expectExportsFailure(
         \\return {
-        \\    look = kosm.takes(kosm_base.Look, function(look) end),
+        \\    look = kosm.takes("big", function(size) end),
         \\}
-    , "~~kosm_frost/root.lua:2: look: kosm.takes gives a base's from, so only from is one; give a value as kosm.value(T, function() ... end)");
+    , "~~kosm_frost/root.lua:2: look: its type is a string; name a Zig type, as kosm_base.Look, kosm.text, or a struct the script declares, as Base");
     try expectExportsFailure(
         \\return {
         \\    Base = {},
@@ -920,7 +1131,7 @@ test "exports kosm cannot read fail naming the script's line" {
         \\return {
         \\    look = kosm.value(kosm.integer(1), function() end),
         \\}
-    , "~~kosm_frost/root.lua:2: look: its type is a table; name a Zig type, as kosm_base.Look, or the script's own Base");
+    , "~~kosm_frost/root.lua:2: look: its type is a table; name a Zig type, as kosm_base.Look, kosm.text, or a struct the script declares, as Base");
     try expectExportsFailure(
         \\return { look = kosm.value(kosm_base.Look) }
     , "~~kosm_frost/root.lua:1: kosm.value takes the function building the value after its type: kosm.value(kosm_base.Look, function() ... end)");

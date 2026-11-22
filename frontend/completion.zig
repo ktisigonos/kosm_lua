@@ -211,7 +211,9 @@ fn writeGlobals(writer: *std.Io.Writer, completion: Completion) std.Io.Writer.Er
         \\---@field optional fun(child: kosm.type|table): kosm.type An app's field that may be null, its default: `kosm.optional(kosm.Color)`.
         \\---@field list fun(item: kosm.type|table): kosm.type An app's field holding a list, empty by default: `kosm.list(kosm.Color)`.
         \\---@field value fun(type: any, build: fun(): any): kosm.export A value a package's root script exports, of a Zig type, built by `build` whenever it is used: `look = kosm.value(kosm_base.Look, function() ... end)`, or the package's kosmos: `kosmos = kosm.value(Base, function() ... end)`.
-        \\---@field takes fun(...: any): kosm.export A base's `from`: the Zig type of each parameter, then the function giving the base: `from = kosm.takes(kosm_base.Look, function(look) ... end)`.
+        \\---@field takes fun(...: any): kosm.export A function giving the base the script declares: the type of each parameter, then the function. A base's `from` (`from = kosm.takes(kosm_base.Look, function(look) ... end)`), or a variant taking `Params` the script declares, filled from flags: `image = kosm.takes(Params, function(params) ... end)`.
+        \\---@field default fun(type: any, value: table): kosm.type A field of a Zig type starting as `value`: `wallpaper = kosm.default(kosm.Image, {{ path = "~/Pictures" }})`.
+        \\---@field kosmos fun(tree: table, name: string): kosm.type A field naming a kosmos whose tree is the struct `tree` the script declares, `name` by default: `on = kosm.kosmos(Base, "personal.nord")`.
         \\kosm = {{}}
         \\
         \\
