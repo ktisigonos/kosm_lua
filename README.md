@@ -118,6 +118,11 @@ declared value (`kosm_base.Look.default`) is a fresh copy each time it is read. 
 `#` and index from 1. Reading an unset optional gives `nil`; setting a field to `nil` fails, use
 `kosm.null`.
 
+A field holding any value to write (a `kosm.Value`, as in an app's `extra`) takes plain Lua data,
+a color or `kosm.raw(text)`, and `kosm.joined({ ... })` for parts written back to back:
+`kosm.joined({ kosm.raw("hl.plugin.x ~= nil and "), { enabled = true }, kosm.raw(" or nil") })`.
+A plain table's keys are written in the order of their names, as Lua tables keep none.
+
 A table of functions gives variants: `kosm apply mine.image` calls `image`, and `kosmos` is the
 script's own; a table of functions inside it is a group, with a `kosmos` of its own. Each may
 return a tree or a table of `base`, `params` and `overrides`. A variant may not share its name
