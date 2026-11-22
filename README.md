@@ -361,6 +361,42 @@ A package's kosmos is applied by the package's name (`kosm apply my_frost`,
 `base = "my_frost"` in Lua, `.{ .name = "my_frost" }` in a Zig kosmos' `kosm.Kosmos` field.
 Relative paths it gives start from the package's folder.
 
+### Looks and bases in packages
+
+A package may instead export values for building on, typed as in Zig. Each value is
+`kosm.value(T, function() ... end)`, its function returning a `T` (a value from Zig) or a table set
+on `T.default` (or on `T`'s field defaults); a base is the struct of apps it declares as `Base`,
+as an app declares `App`, with a `from` naming the Zig type of each parameter before its function:
+
+```lua
+local Base = {
+    --- The official apps.
+    official = kosm.optional(kosm_base.Base),
+}
+return {
+    --- Frost's look.
+    look = kosm.value(kosm_base.Look, function()
+        return {
+            theme = kosm.Theme.from({ palette = { black = "#101820", white = "#e0f0ff" }, mode = "dark" }),
+            fonts = { families = { "Iosevka" }, size = 15 },
+            tweak = function(base, look) base.kitty.fonts.font_size = look.fonts.size + 1 end,
+        }
+    end),
+    Base = Base,
+    from = kosm.takes(kosm_base.Look, function(look)
+        return { official = kosm_base.from(look, "all") }
+    end),
+    kosmos = kosm.value(Base, function() return { official = kosm_base.from(kosm_base.Look.default, "all") } end),
+}
+```
+
+Its Zig module gives `my_frost.look()`, `my_frost.Base`, `my_frost.from(look)` and
+`my_frost.kosmos()`, used from Zig and Lua alike (`kosm_base.from(my_frost.look(), .all)`,
+`my_frost.from(my_frost.look())`). A function in a table a value returns (a look's `tweak`) is
+called whenever Zig calls that field; only tables carry one, so it cannot be set on a value
+from Zig. A script exporting values gives its kosmos as a value too. A field of a Zig type
+without defaults for every field (`kosm_base.Base`) is `kosm.optional`.
+
 Kosm finds a package's script through the package's folder (`~~my_bar/root.lua`), which errors
 name. A config needs to list only the packages it uses itself: a Lua package that comes only
 through another package is found too.

@@ -178,6 +178,9 @@ const base_library =
     \\---@field Style table<string, kosm.type|table> The style's fields by name, each with its type: `chroma = kosm.float(0.6)`.
     \\---@field apply fun(self: any, hue: kosm.Color, background: kosm.Color): kosm.Color The final color of a hue taken from an image; `kosm.Image.readable` keeps it readable on the background.
     \\
+    \\---A value a package's root script exports, made by `kosm.value` or `kosm.takes`.
+    \\---@class kosm.export
+    \\
     \\---A variation family written in Lua, in `colors/`. Write `---@type kosm.family` above its
     \\---`return`.
     \\---@class kosm.family
@@ -207,6 +210,8 @@ fn writeGlobals(writer: *std.Io.Writer, completion: Completion) std.Io.Writer.Er
         \\---@field text kosm.type An app's field holding a string: `kosm.text("bars")`.
         \\---@field optional fun(child: kosm.type|table): kosm.type An app's field that may be null, its default: `kosm.optional(kosm.Color)`.
         \\---@field list fun(item: kosm.type|table): kosm.type An app's field holding a list, empty by default: `kosm.list(kosm.Color)`.
+        \\---@field value fun(type: any, build: fun(): any): kosm.export A value a package's root script exports, of a Zig type, built by `build` whenever it is used: `look = kosm.value(kosm_base.Look, function() ... end)`, or the package's kosmos: `kosmos = kosm.value(Base, function() ... end)`.
+        \\---@field takes fun(...: any): kosm.export A base's `from`: the Zig type of each parameter, then the function giving the base: `from = kosm.takes(kosm_base.Look, function(look) ... end)`.
         \\kosm = {{}}
         \\
         \\

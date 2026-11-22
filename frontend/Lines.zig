@@ -56,6 +56,29 @@ pub fn find(lines: Lines, path: []const Segment) ?usize {
     return lines.line(lines.node(path) orelse return null);
 }
 
+/// `find`, or else the line of the first value at `path` along any of the fields of each name:
+/// a table written in a `local` of the same name as the field holding it
+/// (`local Base = { ... }` then `return { Base = Base }`).
+pub fn findAnywhere(lines: Lines, path: []const Segment) ?usize {
+    if (lines.find(path)) |found| return found;
+    const root = lines.root orelse return null;
+    return lines.line(firstAlong(root, path) orelse return null);
+}
+
+fn firstAlong(parent: kosm.Adapter.Node, path: []const Segment) ?kosm.Adapter.Node {
+    if (path.len == 0) return parent;
+    const key = switch (path[0]) {
+        .key => |key| key,
+        .item => return firstAlong(child(parent, path[0]) orelse return null, path[1..]),
+    };
+    for (parent.children) |candidate| {
+        const candidate_key = candidate.key orelse continue;
+        if (!std.mem.eql(u8, candidate_key, key)) continue;
+        if (firstAlong(candidate, path[1..])) |found| return found;
+    }
+    return null;
+}
+
 /// The parsed node of the value at `path`, as `find` locates it.
 pub fn node(lines: Lines, path: []const Segment) ?kosm.Adapter.Node {
     var found = lines.root orelse return null;
@@ -122,4 +145,19 @@ test "a value held by a local has no line of its own" {
     const lines: Lines = try .init(arena.allocator(), source);
     try testing.expectEqual(3, lines.find(&.{ .{ .key = "overrides" }, .{ .key = "kitty" } }));
     try testing.expectEqual(null, lines.find(&.{ .{ .key = "overrides" }, .{ .key = "kitty" }, .{ .key = "font_size" } }));
+}
+
+test "a value written in a local of its field's name is found there" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const source =
+        \\local Base = {
+        \\    bars = 3,
+        \\}
+        \\return { Base = Base }
+    ;
+    const lines: Lines = try .init(arena.allocator(), source);
+    try testing.expectEqual(null, lines.find(&.{ .{ .key = "Base" }, .{ .key = "bars" } }));
+    try testing.expectEqual(2, lines.findAnywhere(&.{ .{ .key = "Base" }, .{ .key = "bars" } }));
+    try testing.expectEqual(4, lines.findAnywhere(&.{.{ .key = "Base" }}));
 }

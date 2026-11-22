@@ -93,6 +93,18 @@ pub fn read(interpreter: Interpreter, context: *Frontend.Context, index: c_int) 
     };
 }
 
+/// The value at `index` as a loose value, as an exported value's function returned it: each
+/// function inside its tables is kept in the table at `kept` by its place (`place` and the keys
+/// leading to it: "look.tweak"), and read as that place.
+pub fn readExport(interpreter: Interpreter, context: *Frontend.Context, index: c_int, kept: c_int, place: []const u8) Frontend.Error!Loose {
+    var session: Session = .{ .state = interpreter.state, .context = context, .capture = .{ .table = interpreter.absolute(kept) } };
+    try session.capture.?.place.appendSlice(context.arena, place);
+    return session.loose(interpreter.absolute(index), 0) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.Raised => context.fail("{s}", .{session.message}),
+    };
+}
+
 /// Pushes `value`, as a call into Zig gives back its result or kosm hands a script its
 /// arguments: a table as a table, a list as a sequence counting from 1.
 pub fn push(interpreter: Interpreter, context: *Frontend.Context, value: Loose) Frontend.Error!void {
@@ -155,6 +167,16 @@ const Session = struct {
     state: *c.lua_State,
     context: *Frontend.Context,
     message: []const u8 = "",
+    /// Where functions are kept while reading an exported value; null where a function is no
+    /// value.
+    capture: ?Capture = null,
+
+    const Capture = struct {
+        /// The table keeping functions by place, at this absolute index.
+        table: c_int,
+        /// The place being read: "look.fonts".
+        place: std.ArrayList(u8) = .empty,
+    };
 
     fn of(state: ?*c.lua_State) Session {
         const known = state.?;
@@ -226,6 +248,14 @@ const Session = struct {
             .string => .{ .string = try session.context.arena.dupe(u8, interpreter_value.string(index).?) },
             .handle => .{ .handle = handleAt(session.state, index).? },
             .table => if (isPlaced(session.state, index)) return session.placed(index, depth) else try session.table(index, depth),
+            .function => if (session.capture) |*capture| kept: {
+                try interpreter_value.reserve(2);
+                c.lua_pushvalue(session.state, index);
+                _ = c.lua_pushlstring(session.state, capture.place.items.ptr, capture.place.items.len);
+                c.lua_rotate(session.state, -2, 1);
+                c.lua_rawset(session.state, capture.table);
+                break :kept .{ .function = try session.context.arena.dupe(u8, capture.place.items) };
+            } else return session.fail("it is a function; values are strings, numbers, booleans, tables, kosm.null or values from Zig", .{}),
             else => return session.fail("it is {s}; values are strings, numbers, booleans, tables, kosm.null or values from Zig", .{Interpreter.describe(kind)}),
         } };
     }
@@ -258,10 +288,16 @@ const Session = struct {
             switch (interpreter_value.kind(-2)) {
                 .string => {
                     const key = try session.context.arena.dupe(u8, interpreter_value.string(-2).?);
+                    const outer_length = if (session.capture) |*capture| length: {
+                        const length = capture.place.items.len;
+                        try capture.place.print(session.context.arena, ".{s}", .{key});
+                        break :length length;
+                    } else 0;
                     const value = session.loose(-1, depth + 1) catch |err| {
                         interpreter_value.pop(2);
                         return session.within(err, "{s}", .{key});
                     };
+                    if (session.capture) |*capture| capture.place.shrinkRetainingCapacity(outer_length);
                     try entries.append(session.context.arena, .{ .key = key, .value = value });
                 },
                 .integer => {
@@ -280,6 +316,10 @@ const Session = struct {
         std.mem.sort(Loose.Entry, entries.items, {}, entryLessThan);
         if (numbered != 0) {
             if (largest != numbered) return session.fail("its list items have gaps; a list's keys run 1..n", .{});
+            // A function in a list has no place of its own, so there it is no value.
+            const outer_capture = session.capture;
+            session.capture = null;
+            defer session.capture = outer_capture;
             const items = try session.context.arena.alloc(Loose, numbered);
             for (items, 1..) |*item, item_position| {
                 interpreter_value.pushItem(position, @intCast(item_position));
@@ -305,6 +345,7 @@ const Session = struct {
             .float => |float| c.lua_pushnumber(state, float),
             .string, .text => |text| _ = c.lua_pushlstring(state, text.ptr, text.len),
             .handle => |handle| pushHandle(state, handle),
+            .function => |place| return session.fail("the function the script gave at {s} cannot be handed back to it", .{place}),
             .table => |entries| {
                 c.lua_createtable(state, 0, @intCast(entries.len));
                 for (entries) |entry| {
