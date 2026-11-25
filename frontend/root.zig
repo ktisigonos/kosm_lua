@@ -9,6 +9,7 @@ const completion = @import("completion.zig");
 const apps = @import("apps.zig");
 const adapters = @import("adapters.zig");
 const frontends = @import("frontends.zig");
+const helpers = @import("helpers.zig");
 
 /// Reads `kosmoi/<name>.lua`. The script runs in Lua 5.5 without the io, os, package and debug
 /// libraries, with every Zig kosmos under `kosmoi`, kosm's own types under `kosm` and every
@@ -55,8 +56,14 @@ const max_depth = 64;
 const Field = enum { base, params, theme, overrides };
 
 fn load(context: *kosm.Frontend.Context, source: []const u8) kosm.Frontend.Error!kosm.Frontend.Script {
+    return loadTracing(context, source, &helpers.to_stderr);
+}
+
+/// `load`, its traces going to `trace`.
+fn loadTracing(context: *kosm.Frontend.Context, source: []const u8, trace: *const helpers.TraceOutput) kosm.Frontend.Error!kosm.Frontend.Script {
     const interpreter = try Interpreter.init();
     defer interpreter.deinit();
+    helpers.traceInto(interpreter, trace);
     try Bridge.install(interpreter, context);
     try apps.installExports(interpreter, context);
     const chunk_name = try context.arena.dupeSentinel(u8, try context.arena.print("={s}", .{context.path}), 0);
@@ -619,6 +626,66 @@ test "a script calls Zig functions and returns the value it built, changed throu
         \\return box
     );
     try testing.expectEqual(6, script.tree.?.as(test_library.Box).?.size);
+}
+
+/// Loads `source` with the test library, giving back what it traced.
+fn traced(fixture: *Fixture, source: []const u8) ![]const u8 {
+    fixture.context.library = test_library.library;
+    var output: std.Io.Writer.Allocating = .init(fixture.arena.allocator());
+    const trace: helpers.TraceOutput = .{ .writer = &output.writer };
+    _ = try loadTracing(&fixture.context, source, &trace);
+    return output.written();
+}
+
+test "kosm.trace prints its values after the script's line, kosm.inspect shows fields" {
+    var fixture: Fixture = undefined;
+    fixture.init();
+    defer fixture.deinit();
+    try testing.expectEqualStrings(
+        \\kosmoi/mine.lua:1: size 3 kosm.null nil demo.Box
+        \\kosmoi/mine.lua:3: demo.Box { size = 2 }
+        \\kosmoi/mine.lua:4: { "x", list = { ... }, size = 1 }
+        \\kosmoi/mine.lua:5: { "x", list = { 1, 2 }, size = 1 }
+        \\kosmoi/mine.lua:6: { sizes = demo.Sizes (3 items) } demo.Sizes { 1, 2, 3 } {}
+        \\
+    , try traced(&fixture,
+        \\kosm.trace("size", demo.box(3).size, kosm.null, nil, demo.box(1))
+        \\local plain = { size = 1, list = { 1, 2 }, "x" }
+        \\kosm.trace(kosm.inspect(demo.box(2)))
+        \\kosm.trace(kosm.inspect(plain))
+        \\kosm.trace(kosm.inspect(plain, 2))
+        \\kosm.trace(kosm.inspect({ sizes = demo.sizes() }), kosm.inspect(demo.sizes()), kosm.inspect({}))
+        \\return demo.box(1)
+    ));
+    try fixture.expectFailure("kosm.inspect({}, 0)", "kosmoi/mine.lua:1: kosm.inspect(value, depth): depth is how many levels to show, a whole number from 1");
+}
+
+test "a script traces nothing until kosm says where to" {
+    const interpreter = try Interpreter.init();
+    defer interpreter.deinit();
+    try testing.expectEqual(null, interpreter.run("kosm.trace('dropped') return 1", "=kosmoi/mine.lua"));
+}
+
+test "kosm.get reads a path, giving nil once a level is nil, and still fails on a misspelled field" {
+    var fixture: Fixture = undefined;
+    fixture.init();
+    defer fixture.deinit();
+    fixture.context.library = test_library.library;
+    const script = try fixture.load(
+        \\local tree = { icons = { beautyline = { size = 5 } }, layouts = { { layout = "us" }, { layout = "rs" } }, box = demo.box(4) }
+        \\assert(kosm.get(tree, "icons.beautyline.size") == 5)
+        \\assert(kosm.get(tree, "icons.papirus.size") == nil)
+        \\assert(kosm.get({}, "icons.beautyline") == nil)
+        \\assert(kosm.get(tree, "layouts[2].layout") == "rs")
+        \\assert(kosm.get(tree, "layouts[3].layout") == nil)
+        \\assert(kosm.get(tree, "") == tree)
+        \\return demo.box(kosm.get(tree, "box.size"))
+    );
+    try testing.expectEqual(4, script.tree.?.as(test_library.Box).?.size);
+    try fixture.expectFailure("return kosm.get({ box = demo.box(1) }, \"box.sise\")", "kosmoi/mine.lua:1: demo.Box has no field 'sise'");
+    try fixture.expectFailure("return kosm.get({ size = 1 }, \"size.big\")", "kosmoi/mine.lua:1: kosm.get: size is a number, which has no fields or items");
+    try fixture.expectFailure("return kosm.get({}, \"icons..big\")", "kosmoi/mine.lua:1: kosm.get: 'icons..big' is no path; it names fields as a.b and items as [1]");
+    try fixture.expectFailure("return kosm.get({})", "kosmoi/mine.lua:1: kosm.get takes a value, then the path to read in it: \"icons.beautyline\", \"layouts[1].layout\"");
 }
 
 test "ipairs walks a Zig list, which reads as nil one past its end and fails further out" {

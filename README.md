@@ -113,7 +113,8 @@ kosmos is only under `kosmoi`, where it gets its images and files loaded like an
 A value a call returns stays a Zig value, held by reference: reading `t.base.kitty` gives the
 app inside `t`, and setting its fields changes `t`, each assignment checked as in a table
 (`size: expected an integer, got the string 'big'`). A struct's functions taking it first are
-its methods (`color:mix(other, 0.25)`). Giving a Zig value to a call or a field copies it, and a
+its methods (`color:mix(other, 0.25)`, `color:with({ lightness = 0.7 })`), and every value has
+`value:copy()`, a copy to change without changing the original. Giving a Zig value to a call or a field copies it, and a
 declared value (`kosm_base.Look.default`) is a fresh copy each time it is read. Lists count with
 `#` and index from 1. Reading an unset optional gives `nil`; setting a field to `nil` fails, use
 `kosm.null`.
@@ -133,6 +134,14 @@ Editing a script compiles nothing: it is read when kosm runs. It runs in Lua 5.5
 `string`, `math`, `utf8` and `coroutine` libraries and the base library without `dofile`,
 `loadfile`, `load` and `print`; `io`, `os`, `package` and `debug` are not there at all, as a
 kosmos reaches no files or programs.
+
+Three helpers make a script easier to write. `kosm.trace(...)` prints its values to stderr after
+the script's file and line (`kosmoi/mine.lua:12: accent kosm.Color(#7fbbb3ff)`) whenever kosm
+runs the script to apply it, and changes nothing that is applied; it is the script's only output.
+`kosm.inspect(value, depth)` gives a value's fields and their values as text, one level deep by
+default: `kosm.trace(kosm.inspect(t.base.kitty))`. `kosm.get(value, "icons.beautyline")` reads
+a path, items counting from 1 (`"layouts[1].layout"`), and gives `nil` as soon as a level is
+`nil`, while a misspelled field still fails.
 
 Errors name the script and line: Lua's own, a value of the wrong type (`kosmoi/mine.lua:5:
 base.kitty.fonts.font_size: expected a number, got the string 'big'`), a name that is not defined

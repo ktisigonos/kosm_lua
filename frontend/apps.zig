@@ -13,6 +13,7 @@ const c = @import("lua_api");
 const Interpreter = @import("Interpreter.zig");
 const Bridge = @import("Bridge.zig");
 const Lines = @import("Lines.zig");
+const helpers = @import("helpers.zig");
 
 const Declaration = kosm.Frontend.Declaration;
 const Context = kosm.Frontend.Context;
@@ -300,6 +301,7 @@ pub fn call(context: *Context, source: []const u8, function: []const u8, argumen
     const interpreter = shared orelse started: {
         const started = try Interpreter.init();
         errdefer started.deinit();
+        helpers.traceInto(started, &helpers.to_stderr);
         try Bridge.install(started, context);
         try installPrelude(started, context, false);
         shared = started;

@@ -204,6 +204,9 @@ fn writeGlobals(writer: *std.Io.Writer, completion: Completion) std.Io.Writer.Er
         \\---@class kosm{s}{s}
         \\---@field null kosm.null Clears an optional field, so the program's own default applies.
         \\---@field at fun(place: string, value: any): any `value`, written at `place` (`"kosmoi/mine.json:3"`), which kosm's messages about it name. For frontends written in Lua.
+        \\---@field trace fun(...: any) Prints the values to stderr after the script's file and line, while kosm applies it: `kosm.trace("accent", theme.roles.accent)`. It changes nothing that is applied.
+        \\---@field inspect fun(value: any, depth?: integer): string A value's fields and their values as text, `depth` levels deep (1 by default): `kosm.trace(kosm.inspect(base.kitty))`.
+        \\---@field get fun(value: any, path: string): any The value at `path` in `value` (`"icons.beautyline"`, `"layouts[1].layout"`), or nil as soon as a level of it is nil; a misspelled field still fails.
         \\---@field boolean kosm.type An app's field holding true or false: `kosm.boolean(true)`.
         \\---@field integer kosm.type An app's field holding a whole number: `kosm.integer(0)`.
         \\---@field float kosm.type An app's field holding a number: `kosm.float(1.5)`.

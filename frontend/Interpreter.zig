@@ -5,6 +5,7 @@ const Interpreter = @This();
 
 const std = @import("std");
 const c = @import("lua_api");
+const helpers = @import("helpers.zig");
 
 state: *c.lua_State,
 
@@ -33,8 +34,9 @@ const libraries = [_]struct { name: [:0]const u8, open: c.lua_CFunction }{
     .{ .name = "coroutine", .open = c.luaopen_coroutine },
 };
 
-/// A fresh state with the libraries above and the global `kosm` table holding `kosm.null` and
-/// `kosm.at`.
+/// A fresh state with the libraries above and the global `kosm` table holding `kosm.null`,
+/// `kosm.at` and the helpers for writing a script (`kosm.trace`, which prints nothing until
+/// `helpers.traceInto` says where).
 /// Call `deinit` when done.
 pub fn init() error{OutOfMemory}!Interpreter {
     const state = c.luaL_newstate() orelse return error.OutOfMemory;
@@ -56,6 +58,7 @@ pub fn init() error{OutOfMemory}!Interpreter {
     _ = c.lua_getglobal(state, "kosm");
     _ = c.luaL_newmetatable(state, placed_metatable);
     if (c.lua_pcallk(state, 2, 0, 0, 0, null) != c.LUA_OK) return error.OutOfMemory;
+    try helpers.install(interpreter);
     if (interpreter.run(strict_globals, "=kosm")) |_| return error.OutOfMemory;
     interpreter.pop(1);
     return interpreter;
