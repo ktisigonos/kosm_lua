@@ -165,6 +165,7 @@ const base_library =
     \\---@field from? fun(theme: kosm.Theme): table The app built from the theme: a table of the fields it sets. Without it the app starts from its defaults.
     \\---@field apply fun(self: any, output: kosm.Output) Writes the app's files through `output`.
     \\---@field reload? fun(self: any, reloader: kosm.Reloader) Tells the program to read its files again.
+    \\---@field checkup? fun(self: any): table What `kosm doctor` checks: `{ program = { command = "cava" }, includes = { { file = "~/.config/cava/config", line = "include kosm" } } }`, as a `kosm.Checkup`.
     \\
     \\---A modifier written in Lua, in `colors/`. Write `---@type kosm.modifier` above its `return`,
     \\---and `---@param self <name>.Modifier` above `apply` to complete its fields.

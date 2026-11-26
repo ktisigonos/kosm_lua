@@ -2,7 +2,7 @@
 //! declares, read while kosm builds the config, and its functions, run in the one interpreter
 //! every script shares. An app's script returns `{ App = { field = kosm.integer(0), ... },
 //! from = function(theme) ... end, apply = function(self, output) ... end,
-//! reload = function(self, reloader) ... end }`; a modifier's `{ Modifier = { ... },
+//! reload = function(self, reloader) ... end, checkup = function(self) ... end }`; a modifier's `{ Modifier = { ... },
 //! apply = function(self, color) ... end }`; a palette style's `{ Style = { ... },
 //! apply = function(self, hue, background) ... end }`; a family's
 //! `{ Family = { soft = kosm.Modifier, ... }, from = function(mode) ... end }`.
@@ -42,19 +42,19 @@ const Shape = struct {
     fields: [:0]const u8,
     /// The functions the script may give.
     functions: []const []const u8,
-    /// What the returned table holds, for messages: "App, from, apply and maybe reload".
+    /// What the returned table holds, for messages: "App, from and apply, and maybe reload and checkup".
     holds: []const u8,
     /// Whose script it is, for messages: "an app's".
     whose: []const u8,
 };
 
-const app_shape: Shape = .{ .fields = "App", .functions = &.{ "from", "apply", "reload" }, .holds = "App, from, apply and maybe reload", .whose = "an app's" };
+const app_shape: Shape = .{ .fields = "App", .functions = &.{ "from", "apply", "reload", "checkup" }, .holds = "App, from and apply, and maybe reload and checkup", .whose = "an app's" };
 const modifier_shape: Shape = .{ .fields = "Modifier", .functions = &.{"apply"}, .holds = "Modifier and apply", .whose = "a modifier's" };
 const style_shape: Shape = .{ .fields = "Style", .functions = &.{"apply"}, .holds = "Style and apply", .whose = "a palette style's" };
 const base_shape: Shape = .{ .fields = "Base", .functions = &.{}, .holds = "Base, from and its values as kosm.value(T, function() ... end)", .whose = "a package's" };
 const family_shape: Shape = .{ .fields = "Family", .functions = &.{"from"}, .holds = "Family and from", .whose = "a variation family's" };
 /// The most functions any shape gives.
-const max_functions = 3;
+const max_functions = 4;
 
 /// Gives `kosm` the constructors of field types and of exported values, run with `kosm`, the
 /// three metatables and whether kosm is reading a declaration. While it reads one no Zig code runs, so every other
@@ -290,7 +290,7 @@ fn shapeOf(path: []const u8) []const u8 {
     if (std.mem.startsWith(u8, path, "adapters/")) return "an adapter's script returns a table with name, extensions and the capabilities it gives";
     if (std.mem.startsWith(u8, path, "frontends/")) return "a frontend's script returns a table with name, extensions and load, and maybe variants and complete";
     if (std.mem.startsWith(u8, path, "~~") or std.mem.startsWith(u8, path, "kosmoi/")) return "a kosmos script exporting values returns a table of what it gives, its values as kosm.value(T, function() ... end)";
-    return "an app's script returns a table with App, from, apply and maybe reload";
+    return "an app's script returns a table with App, from and apply, and maybe reload and checkup";
 }
 
 /// Calls `function` of the app, adapter, frontend or package script at `context.path`, running
@@ -828,6 +828,22 @@ fn expectDeclareFailure(source: []const u8, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, context.message.?);
 }
 
+test "an app gives every function it may, in the order kosm knows them, whatever order it writes them in" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const declaration = try testDeclare(arena.allocator(),
+        \\return {
+        \\    App = {},
+        \\    checkup = function(self) return { program = { command = "cava" } } end,
+        \\    reload = function(self, reloader) end,
+        \\    apply = function(self, output) end,
+        \\    from = function(theme) return {} end,
+        \\}
+    );
+    try testing.expectEqual(4, declaration.functions.len);
+    for ([_][]const u8{ "from", "apply", "reload", "checkup" }, declaration.functions) |expected, function| try testing.expectEqualStrings(expected, function);
+}
+
 test "an app's fields come in the order written, with their types, defaults and doc comments" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
@@ -943,7 +959,7 @@ test "a declaration kosm cannot read fails naming the script's line" {
         \\    App = {},
         \\    aply = function(self, output) end,
         \\}
-    , "apps/cava/root.lua:3: the returned table sets 'aply'; it holds App, from, apply and maybe reload");
+    , "apps/cava/root.lua:3: the returned table sets 'aply'; it holds App, from and apply, and maybe reload and checkup");
     try expectDeclareFailure(
         \\local color = kosm.Color.parseHex("#ffffff")
         \\return { App = {}, apply = function(self, output) end }
@@ -999,7 +1015,7 @@ test "an app's functions run in the shared interpreter, each script with globals
     try testing.expectEqualStrings("cannot write", context.message.?);
     context.message = null;
     try testing.expectError(error.InvalidScript, call(&context, second, "reload", &.{}));
-    try testing.expectEqualStrings("apps/second.lua gives no function 'reload'; an app's script returns a table with App, from, apply and maybe reload", context.message.?);
+    try testing.expectEqualStrings("apps/second.lua gives no function 'reload'; an app's script returns a table with App, from and apply, and maybe reload and checkup", context.message.?);
     const broken = "return { from = function(theme) return theme.palette end }";
     context = .{ .arena = arena.allocator(), .path = "apps/broken.lua" };
     try testing.expectError(error.InvalidScript, call(&context, broken, "from", &.{.{ .value = .null }}));
